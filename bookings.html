@@ -1,57 +1,53 @@
 <!doctype html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="utf-8" />
-  <title>Bookings — EasyQue</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="utf-8">
+  <title>EasyQue — Bookings</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
   <style>
-    body { font-family:Inter,Arial,Helvetica,sans-serif; background:#f6f8fb; color:#202124; padding:18px }
-    .wrap { max-width:1200px; margin:0 auto; display:flex; gap:20px; align-items:flex-start; }
-    .col { background:#fff; border-radius:8px; padding:18px; box-shadow:0 6px 20px rgba(12,20,40,0.04); border:1px solid #eee; }
-    .left { width:380px }
-    .right { flex:1 }
-    label { display:block; font-weight:700; margin-top:10px }
-    input, select { width:100%; padding:10px 12px; border-radius:6px; border:1px solid #e5e9f2; margin-top:6px; box-sizing:border-box }
-    button { background:#1b6eff; color:#fff; border:0; padding:10px 14px; border-radius:8px; cursor:pointer; margin-top:12px }
-    table { width:100%; border-collapse:collapse; margin-top:12px; }
-    th, td { padding:8px; border-bottom:1px solid #f0f2f8; text-align:left }
-    .muted { color:#6b7280; font-size:13px }
-    .error { color:#b00020; margin-top:8px }
+    body{font-family:Arial,Helvetica,sans-serif;background:#f4f7fb;padding:20px}
+    .container{max-width:1100px;margin:0 auto;display:flex;gap:20px}
+    .left,.right{background:#fff;padding:18px;border-radius:8px;border:1px solid #eee}
+    .left{width:360px}
+    .right{flex:1}
+    label{display:block;font-weight:700;margin-top:10px}
+    input,select{width:100%;padding:10px;border-radius:6px;border:1px solid #e5e9f2;margin-top:6px}
+    button{background:#1b6eff;color:#fff;padding:8px 12px;border:0;border-radius:6px;margin-top:12px;cursor:pointer}
+    table{width:100%;border-collapse:collapse;margin-top:12px}
+    th,td{padding:8px;border-bottom:1px solid #f0f2f8;text-align:left}
+    .muted{color:#6b7280;font-size:13px}
+    .error{color:#b00020;margin-top:8px}
   </style>
 </head>
 <body>
-
   <h1>EasyQue — Bookings</h1>
-
-  <div class="wrap">
-    <div class="col left">
+  <div class="container">
+    <div class="left">
       <h3>Create booking</h3>
+      <label>Organization</label>
+      <select id="orgSelect"><option>Loading organizations...</option></select>
 
-      <label for="orgSelect">Organization</label>
-      <select id="orgSelect"><option value="">-- loading organizations --</option></select>
+      <label>Department</label>
+      <select id="deptSelect"><option>-- choose dept --</option></select>
 
-      <label for="deptSelect">Department</label>
-      <select id="deptSelect"><option value="">-- choose department --</option></select>
+      <label>Assigned user</label>
+      <select id="userSelect"><option>-- choose assigned user --</option></select>
 
-      <label for="userSelect">Assigned user</label>
-      <select id="userSelect"><option value="">-- choose assigned user --</option></select>
+      <label>Customer name</label>
+      <input id="custName">
 
-      <label for="customerName">Customer name</label>
-      <input id="customerName" placeholder="Customer name">
-
-      <label for="customerPhone">Customer phone</label>
-      <input id="customerPhone" placeholder="Mobile/WhatsApp number">
+      <label>Customer phone</label>
+      <input id="custPhone">
 
       <button id="btnCreate">Create booking (demo)</button>
-      <div id="leftMsg" class="muted" style="margin-top:8px">Use this form to create a booking for the selected org.</div>
+      <div id="leftMsg" class="muted">Use this form to create a booking for the selected org.</div>
       <div id="leftError" class="error" style="display:none"></div>
     </div>
 
-    <div class="col right">
+    <div class="right">
       <h3>Bookings</h3>
-
       <div style="display:flex;gap:12px;align-items:center">
-        <input id="dateFilter" type="date" style="max-width:200px">
+        <input id="filterDate" type="date" style="max-width:200px">
         <button id="btnReload">Reload</button>
         <div style="margin-left:auto" class="muted">Select organization to show bookings</div>
       </div>
@@ -59,9 +55,7 @@
       <div id="bookingsMsg" class="muted" style="margin-top:12px">No organization selected.</div>
 
       <table id="bookingsTable" style="display:none">
-        <thead>
-          <tr><th>ID</th><th>Token</th><th>Name</th><th>Phone</th><th>Assigned</th><th>Date</th><th>Status</th></tr>
-        </thead>
+        <thead><tr><th>ID</th><th>Token</th><th>Name</th><th>Phone</th><th>Assigned</th><th>Date</th><th>Status</th></tr></thead>
         <tbody id="bookingsBody"></tbody>
       </table>
 
@@ -71,85 +65,73 @@
 
 <script>
 (async function(){
-  const orgSelect = document.getElementById('orgSelect');
-  const deptSelect = document.getElementById('deptSelect');
-  const userSelect = document.getElementById('userSelect');
-  const btnReload = document.getElementById('btnReload');
-  const btnCreate = document.getElementById('btnCreate');
-  const dateFilter = document.getElementById('dateFilter');
-  const bookingsMsg = document.getElementById('bookingsMsg');
-  const bookingsTable = document.getElementById('bookingsTable');
-  const bookingsBody = document.getElementById('bookingsBody');
-  const leftMsg = document.getElementById('leftMsg');
-  const leftError = document.getElementById('leftError');
-  const rightError = document.getElementById('rightError');
-
-  function token() {
-    return localStorage.getItem('accessToken') || localStorage.getItem('token') || null;
-  }
-
+  function token(){ return localStorage.getItem('accessToken') || null; }
   async function fetchJSON(url, opts) {
-    opts = opts || {};
-    opts.headers = opts.headers || {};
-    const t = token();
-    if (t) opts.headers['Authorization'] = 'Bearer ' + t;
+    opts = opts || {}; opts.headers = opts.headers || {};
+    const t = token(); if (t) opts.headers['Authorization'] = 'Bearer ' + t;
     const r = await fetch(url, opts);
     const txt = await r.text().catch(()=>null);
     const ct = r.headers.get('content-type') || '';
     if (!r.ok) {
-      const e = new Error('HTTP ' + r.status + ': ' + (txt ? txt.substring(0,200) : r.statusText));
-      e.status = r.status; e.body = txt;
-      throw e;
+      const e = new Error('HTTP ' + r.status + ': ' + (txt || r.statusText));
+      e.body = txt; throw e;
     }
     if (ct.indexOf('application/json') !== -1) return JSON.parse(txt);
     return txt;
   }
 
+  const orgSelect = document.getElementById('orgSelect');
+  const deptSelect = document.getElementById('deptSelect');
+  const userSelect = document.getElementById('userSelect');
+  const btnCreate = document.getElementById('btnCreate');
+  const btnReload = document.getElementById('btnReload');
+  const bookingsMsg = document.getElementById('bookingsMsg');
+  const bookingsTable = document.getElementById('bookingsTable');
+  const bookingsBody = document.getElementById('bookingsBody');
+  const leftError = document.getElementById('leftError');
+  const rightError = document.getElementById('rightError');
+
   async function loadOrgs() {
-    orgSelect.innerHTML = '<option value="">Loading organizations...</option>';
+    orgSelect.innerHTML = '<option>Loading organizations...</option>';
     try {
       const j = await fetchJSON('/organizations');
       if (!j || !j.ok) throw new Error('Invalid organizations response');
-      const orgs = j.organizations || [];
+      const arr = j.organizations || [];
       orgSelect.innerHTML = '<option value="">-- choose org --</option>';
-      orgs.forEach(o => {
+      arr.forEach(o => {
         const opt = document.createElement('option');
         opt.value = o.id;
         opt.textContent = `${o.name} (${o.id})`;
         orgSelect.appendChild(opt);
       });
-    } catch (err) {
-      orgSelect.innerHTML = '<option value="">-- unable to load orgs --</option>';
-      bookingsMsg.textContent = 'Error loading organizations: ' + (err && err.message || err);
-      console.error('loadOrgs error', err);
+    } catch (e) {
+      orgSelect.innerHTML = '<option>-- unable to load orgs --</option>';
+      bookingsMsg.textContent = 'Error loading organizations: ' + (e && e.message || e);
+      console.error('loadOrgs error', e);
     }
   }
 
-  async function loadOrgDetails(orgId) {
+  async function loadOrgDetails(id) {
+    if (!id) return;
     deptSelect.innerHTML = '<option>Loading...</option>';
     userSelect.innerHTML = '<option>Loading...</option>';
     bookingsMsg.textContent = 'Loading organization details...';
-    bookingsTable.style.display = 'none';
     try {
-      const j = await fetchJSON('/organizations/' + encodeURIComponent(orgId));
-      if (!j || !j.ok) throw new Error('Invalid org details response');
+      const j = await fetchJSON('/organizations/' + encodeURIComponent(id));
+      if (!j || !j.ok) throw new Error('Invalid org response');
       const deps = j.departments || [];
       const users = j.users || [];
       deptSelect.innerHTML = '<option value="">-- choose dept --</option>';
-      deps.forEach(d => {
-        const opt = document.createElement('option'); opt.value = d.id; opt.textContent = d.name; deptSelect.appendChild(opt);
-      });
+      deps.forEach(d => { const opt = document.createElement('option'); opt.value=d.id; opt.textContent=d.name; deptSelect.appendChild(opt); });
       userSelect.innerHTML = '<option value="">-- choose assigned user --</option>';
-      users.forEach(u => {
-        const opt = document.createElement('option'); opt.value = u.id; opt.textContent = u.name + (u.email ? ' <' + u.email + '>' : ''); userSelect.appendChild(opt);
-      });
+      users.forEach(u => { const opt = document.createElement('option'); opt.value=u.id; opt.textContent = u.name || u.email; userSelect.appendChild(opt); });
 
-      await loadBookingsForOrg(orgId);
-    } catch (err) {
-      deptSelect.innerHTML = '<option value="">-- error --</option>';
-      userSelect.innerHTML = '<option value="">-- error --</option>';
-      bookingsMsg.textContent = 'Error loading organization: ' + (err && err.message || err);
-      console.error('loadOrgDetails error', err);
+      await loadBookingsForOrg(id);
+    } catch (e) {
+      deptSelect.innerHTML = '<option>-- error --</option>';
+      userSelect.innerHTML = '<option>-- error --</option>';
+      bookingsMsg.textContent = 'Error loading organization: ' + (e && e.message || e);
+      console.error('loadOrgDetails', e);
     }
   }
 
@@ -158,49 +140,41 @@
     bookingsTable.style.display = 'none';
     rightError.style.display = 'none';
     try {
-      // Try the most likely endpoints and shapes
-      let url = `/bookings?org_id=${encodeURIComponent(orgId)}`;
-      let r = await fetch(url);
-      if (r.status === 404) {
-        url = `/bookings?org=${encodeURIComponent(orgId)}`;
-        r = await fetch(url);
-      }
+      // try common endpoint shapes
+      let r = await fetch(`/bookings?org_id=${encodeURIComponent(orgId)}`);
+      if (r.status === 404) r = await fetch(`/bookings?org=${encodeURIComponent(orgId)}`);
       if (!r.ok) {
         const txt = await r.text().catch(()=>null);
         throw new Error('Failed to fetch bookings: ' + (txt || r.statusText));
       }
       const ct = r.headers.get('content-type') || '';
       const txt = await r.text();
-      let j;
-      if (ct.indexOf('application/json') !== -1) j = JSON.parse(txt);
-      else {
-        // server returned HTML or plain text - not an error, but we cannot parse bookings
-        bookingsMsg.textContent = 'Bookings endpoint returned non-JSON data. Check server logs.';
-        console.warn('bookings endpoint returned non-json', txt);
+      if (ct.indexOf('application/json') === -1) {
+        bookingsMsg.textContent = 'Bookings endpoint returned non-JSON (check server).';
+        console.warn('bookings returned non-json', txt);
         return;
       }
-
+      const j = JSON.parse(txt);
       let arr = [];
       if (Array.isArray(j)) arr = j;
       else if (j.ok && Array.isArray(j.bookings)) arr = j.bookings;
-      else if (j.bookings && Array.isArray(j.bookings)) arr = j.bookings;
+      else if (Array.isArray(j.bookings)) arr = j.bookings;
       else if (Array.isArray(j.data)) arr = j.data;
       else {
-        bookingsMsg.textContent = 'No bookings returned by server.';
+        bookingsMsg.textContent = 'No bookings returned by server';
         return;
       }
-
       populateBookings(arr);
-    } catch (err) {
-      bookingsMsg.textContent = 'Unable to load bookings: ' + (err && err.message || err);
-      console.error('loadBookingsForOrg error', err);
+    } catch (e) {
+      bookingsMsg.textContent = 'Unable to load bookings: ' + (e && e.message || e);
+      console.error('loadBookingsForOrg', e);
     }
   }
 
   function populateBookings(arr) {
     bookingsBody.innerHTML = '';
     if (!arr || arr.length === 0) {
-      bookingsMsg.textContent = 'No bookings found for this organization';
+      bookingsMsg.textContent = 'No bookings found';
       bookingsTable.style.display = 'none';
       return;
     }
@@ -225,58 +199,34 @@
     return String(s).replace(/[&<>"']/g, function(m){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[m]; });
   }
 
-  // Create booking (demo) - adapt to your server's create booking route if needed
   btnCreate.addEventListener('click', async () => {
     leftError.style.display = 'none';
-    leftMsg.textContent = 'Creating booking...';
     const orgId = orgSelect.value;
     const deptId = deptSelect.value || null;
     const userId = userSelect.value || null;
-    const name = (document.getElementById('customerName').value || '').trim();
-    const phone = (document.getElementById('customerPhone').value || '').trim();
-    if (!orgId) { leftError.style.display = 'block'; leftError.textContent = 'Please select an organization.'; return; }
-    if (!name || !phone) { leftError.style.display = 'block'; leftError.textContent = 'Please enter customer name and phone.'; return; }
+    const name = (document.getElementById('custName').value || '').trim();
+    const phone = (document.getElementById('custPhone').value || '').trim();
+    if (!orgId) { leftError.style.display='block'; leftError.textContent='Please select org'; return; }
+    if (!name || !phone) { leftError.style.display='block'; leftError.textContent='Name & phone required'; return; }
     try {
-      // try POST /bookings (body shape may differ per your server)
       const body = { org_id: orgId, department_id: deptId, assigned_user_id: userId, name, phone, booking_date: new Date().toISOString().slice(0,10) };
-      const resp = await fetch('/bookings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(token()? { 'Authorization': 'Bearer ' + token() } : {}) }, body: JSON.stringify(body) });
+      const resp = await fetch('/bookings', { method: 'POST', headers: { 'Content-Type':'application/json', ...(token()? { 'Authorization':'Bearer '+token() } : {}) }, body: JSON.stringify(body) });
       if (!resp.ok) {
-        const text = await resp.text().catch(()=>null);
-        throw new Error('Server returned ' + resp.status + ': ' + (text || resp.statusText));
+        const t = await resp.text().catch(()=>null);
+        throw new Error('Server error: ' + (t || resp.statusText));
       }
-      leftMsg.textContent = 'Booking created (server responded OK). Reloading bookings...';
+      leftMsg.textContent = 'Booking created. Reloading...';
       await loadBookingsForOrg(orgId);
-    } catch (err) {
-      leftError.style.display = 'block';
-      leftError.textContent = 'Create booking failed: ' + (err && err.message || err);
+    } catch (e) {
+      leftError.style.display='block'; leftError.textContent = 'Create booking failed: ' + (e && e.message || e);
     }
   });
 
-  orgSelect.addEventListener('change', async () => {
-    const id = orgSelect.value;
-    if (!id) {
-      bookingsMsg.textContent = 'No organization selected.';
-      bookingsTable.style.display = 'none';
-      return;
-    }
-    await loadOrgDetails(id);
-  });
+  orgSelect.addEventListener('change', async () => { const id = orgSelect.value; if (!id) { bookingsMsg.textContent='No organization selected'; bookingsTable.style.display='none'; return; } await loadOrgDetails(id); });
+  btnReload.addEventListener('click', async () => { const id = orgSelect.value; if (!id) { bookingsMsg.textContent='Select organization first'; return; } await loadBookingsForOrg(id); });
 
-  btnReload.addEventListener('click', async () => {
-    const id = orgSelect.value;
-    if (!id) {
-      bookingsMsg.textContent = 'Select an organization first';
-      return;
-    }
-    await loadBookingsForOrg(id);
-  });
-
-  // initial load
   await loadOrgs();
-
 })();
 </script>
-
 </body>
 </html>
-
