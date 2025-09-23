@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"><title>Start 7-day trial</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  body{font-family:Arial;margin:24px;background:#f6f8fa}
+  .card{background:#fff;padding:18px;border-radius:10px;border:1px solid #e6e9ee;max-width:640px;margin:0 auto}
+  .option{border:1px solid #e6e9ee;padding:12px;border-radius:8px;margin-top:10px}
+  button{margin-top:14px;padding:12px;border-radius:8px;border:0;background:#0b5cff;color:#fff;width:100%}
+  .link{color:#0b5cff;cursor:pointer;text-decoration:underline}
+</style>
+</head>
+<body>
+<div class="card">
+  <h2>Start your 7 days free trial</h2>
+  <p class="muted">Please select one of the features to continue</p>
+
+  <label class="option"><input type="radio" name="mode" value="semi" checked> Do you prefer to send messages using your own phone number? (Semi-Automatic)</label>
+
+  <label class="option"><input type="radio" name="mode" value="full"> Do you prefer to send messages using our platform? (Full-Automatic) — <span id="viewCharges" class="link">view charges</span></label>
+
+  <div style="margin-top:12px">
+    <button id="btnContinue">Continue</button>
+  </div>
+
+  <div id="chargesBox" style="display:none;margin-top:12px;padding:12px;border-radius:8px;border:1px solid #eee;background:#fbfdff"></div>
+</div>
+
+<script>
+const base = window.location.origin;
+
+document.getElementById('viewCharges').addEventListener('click', async ()=>{
+  const box = document.getElementById('chargesBox');
+  box.textContent = 'Loading charges...';
+  try {
+    const r = await fetch(base + '/signup/options');
+    const j = await r.json();
+    if (!r.ok) { box.textContent = 'Failed to load charges'; return; }
+    // expected j.fees = { annual_fee, monthly_per_user, message_cost_per_booking }
+    const f = j.fees || {};
+    box.innerHTML = `<b>Charges</b>
+      <div>Annual fee: ${f.annual_fee || 0}</div>
+      <div>Monthly platform per user: ${f.monthly_per_user || 0}</div>
+      <div>Message cost per booking: ${f.message_cost_per_booking || 0}</div>`;
+    box.style.display = 'block';
+  } catch (err) {
+    box.textContent = 'Error loading charges: ' + err.message;
+    box.style.display = 'block';
+  }
+});
+
+document.getElementById('btnContinue').addEventListener('click', ()=>{
+  const mode = document.querySelector('input[name="mode"]:checked').value;
+  // pass chosen mode to set-up-account page via query
+  window.location = '/set-up-account.html?flow=trial&mode=' + encodeURIComponent(mode);
+});
+</script>
+</body>
+</html>
