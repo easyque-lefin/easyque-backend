@@ -1,216 +1,244 @@
-
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>EasyQue - Organization setup</title>
+  <title>Organization / Fees — EasyQue</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    body { font-family: Arial, sans-serif; margin: 24px; max-width:1000px; }
-    .card { background:#fff;border:1px solid #ddd;padding:18px;border-radius:8px;margin-bottom:20px; }
-    label { display:block;margin-top:8px;font-weight:600; }
-    input, textarea, select { width:100%; padding:8px; margin-top:6px; box-sizing:border-box; border:1px solid #ccc;border-radius:6px; }
-    button { padding:8px 12px;border-radius:6px;border:0;background:#007bff;color:#fff;margin-top:12px; cursor:pointer; }
-    .muted { color:#666; font-size:0.9em; }
-    #orgMsg, #inviteMsg { margin-top:8px; }
+    body { font-family:Inter,Arial,Helvetica,sans-serif; background:#f5f7fb; color:#111; padding:20px; }
+    .wrap { max-width:920px; margin:20px auto; background:#fff; border-radius:8px; padding:22px; box-shadow:0 6px 20px rgba(12,20,40,0.04); }
+    h1 { margin:0 0 12px; font-size:22px; }
+    .row { display:flex; gap:12px; align-items:center; margin-bottom:12px; }
+    input[type="text"], input[type="number"], select, textarea { width:100%; padding:10px 12px; border-radius:6px; border:1px solid #e0e6ef; box-sizing:border-box; font-size:14px; }
+    label { font-weight:600; margin-bottom:6px; display:block; }
+    button { background:#0b74de; color:#fff; border:0; padding:10px 14px; border-radius:8px; cursor:pointer; font-weight:600; }
+    .muted { color:#666; font-size:14px; margin-top:8px; }
+    .fees { white-space:pre-wrap; font-family:monospace; background:#fafafa; padding:12px; border-radius:6px; border:1px dashed #eee; }
+    .small { font-size:13px; color:#444; }
+    .inline { display:inline-block; vertical-align:middle; }
+    .form-grid { display:grid; grid-template-columns: 1fr 220px; gap:12px; align-items:end; }
+    .notice { background:#fff6d9; border:1px solid #ffe5a0; padding:10px; border-radius:6px; color:#6a4a00; margin-bottom:12px; }
+    .error { color:#a00; margin-top:8px; }
   </style>
 </head>
 <body>
+  <div class="wrap" id="app">
+    <h1>Fee settings</h1>
 
-<!-- Fee settings editor (admin only) -->
-<div style="margin-top:20px;border:1px solid #eee;padding:12px;border-radius:8px;max-width:760px;">
-  <h3>Fee settings</h3>
-  <div id="feeList" style="margin-bottom:8px;"></div>
-  <div style="display:flex;gap:8px;align-items:center;">
-    <input id="fee_key" placeholder="fee key (e.g. monthly_platform_fee_per_user)" style="flex:1;padding:8px;">
-    <input id="fee_value" placeholder="value (number or text)" style="width:160px;padding:8px;">
-    <button id="btnSaveFee" style="padding:8px 12px;">Save</button>
-  </div>
+    <div id="notice" class="notice" style="display:none"></div>
 
-  <h4 style="margin-top:12px;">View charges (sample)</h4>
-  <label>Mode:
-    <select id="preview_mode">
-      <option value="semi">Semi (no provider)</option>
-      <option value="full">Full (we send messages)</option>
-    </select>
-  </label>
-  <label>Users: <input id="preview_users" type="number" value="10"></label>
-  <label>Bookings/day (full mode only): <input id="preview_bookings" type="number" value="500"></label>
-  <div style="margin-top:8px;">
-    <button id="btnPreview" style="padding:8px 12px;">Calculate charge</button>
-    <div id="preview_result" style="margin-top:8px;font-weight:bold;"></div>
+    <div id="feeDisplay" class="fees">Loading fee settings...</div>
+
+    <div style="margin-top:12px; margin-bottom:18px;">
+      <div style="display:flex; gap:10px;">
+        <input id="feeKey" type="text" placeholder="fee key (e.g. monthly_platform_fee_per_user)">
+        <input id="feeValue" type="text" placeholder="value (number)">
+        <button id="btnSaveFee">Save</button>
+      </div>
+      <div class="muted">To edit fees programmatically you can also use PUT /admin/fees (requires admin auth).</div>
+    </div>
+
+    <hr style="margin:18px 0">
+
+    <h2 style="margin-top:0">View charges (sample)</h2>
+    <div style="margin-bottom:10px" class="small muted">Pick a mode and sample inputs to preview the initial amount that will be charged.</div>
+
+    <div style="display:flex; gap:12px; margin-bottom:8px;">
+      <div style="flex:1">
+        <label for="mode">Mode</label>
+        <select id="mode">
+          <option value="semi">Semi-Automatic (you use your phone)</option>
+          <option value="full">Full-Automatic (we send messages)</option>
+        </select>
+      </div>
+
+      <div style="width:180px">
+        <label for="users">Users (org)</label>
+        <input id="users" type="number" value="10" min="0">
+      </div>
+    </div>
+
+    <div style="margin-bottom:12px;">
+      <label for="bookingsPerDay">Expected bookings per day (full mode only)</label>
+      <input id="bookingsPerDay" type="number" value="500" min="0">
+    </div>
+
+    <div class="form-grid">
+      <div>
+        <button id="btnCalc">Calculate charge</button>
+        <div id="calcMsg" class="muted" style="margin-top:8px">Press calculate to fetch server-side estimate.</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:18px; font-weight:700">Estimated initial amount:</div>
+        <div id="calcResult" style="font-size:20px; margin-top:6px">—</div>
+      </div>
+    </div>
+
+    <div id="error" class="error" style="display:none"></div>
+
   </div>
-</div>
 
 <script>
 (async function(){
-  const base = window.location.origin;
-  const token = localStorage.getItem('accessToken');
+  // Helper to get saved JWT token (if any). Update if your app stores token with other key.
+  function getToken(){
+    return localStorage.getItem('accessToken') || localStorage.getItem('token') || null;
+  }
+
+  const feeDisplay = document.getElementById('feeDisplay');
+  const feeKey = document.getElementById('feeKey');
+  const feeValue = document.getElementById('feeValue');
+  const btnSaveFee = document.getElementById('btnSaveFee');
+  const btnCalc = document.getElementById('btnCalc');
+  const calcResult = document.getElementById('calcResult');
+  const calcMsg = document.getElementById('calcMsg');
+  const modeEl = document.getElementById('mode');
+  const usersEl = document.getElementById('users');
+  const bookingsDayEl = document.getElementById('bookingsPerDay');
+  const notice = document.getElementById('notice');
+  const errorEl = document.getElementById('error');
+
+  function showError(txt){ errorEl.style.display='block'; errorEl.textContent = txt; }
+  function clearError(){ errorEl.style.display='none'; errorEl.textContent = ''; }
+
+  async function fetchJSON(url, opts){
+    const token = getToken();
+    opts = opts || {};
+    opts.headers = opts.headers || {};
+    if (token) opts.headers['Authorization'] = 'Bearer ' + token;
+    const r = await fetch(url, opts);
+    // return parsed JSON if possible, otherwise throw with text
+    const txt = await r.text().catch(()=>null);
+    const ct = r.headers.get('content-type') || '';
+    if (!r.ok) {
+      const message = txt ? txt.substring(0,200) : r.statusText;
+      const err = new Error('HTTP ' + r.status + ': ' + message);
+      err.status = r.status;
+      err.body = txt;
+      throw err;
+    }
+    if (ct.indexOf('application/json') !== -1) {
+      return JSON.parse(txt);
+    }
+    // non-json success (rare): return raw text
+    return txt;
+  }
 
   async function loadFees() {
+    feeDisplay.textContent = 'Loading fee settings...';
     try {
-      const r = await fetch(base + '/admin/fees', { headers: { Authorization: 'Bearer ' + token }});
-      const j = await r.json();
-      const list = document.getElementById('feeList');
-      list.innerHTML = '';
-      if (j.ok && j.fees) {
-        for (const k of Object.keys(j.fees)) {
-          const v = j.fees[k].value_decimal !== null ? j.fees[k].value_decimal : j.fees[k].value_text;
-          const row = document.createElement('div');
-          row.textContent = k + ' = ' + v;
-          list.appendChild(row);
+      // preferred: /admin/fees endpoint returns JSON { ok:true, fees: {key: value} } OR array
+      let j = null;
+      try {
+        j = await fetchJSON('/admin/fees', { method: 'GET' });
+      } catch (e) {
+        // fallback: try older /fee_settings route if present
+        try {
+          j = await fetchJSON('/fee_settings', { method: 'GET' });
+        } catch (e2) {
+          // final fallback: call payments/calc with zero inputs to fetch fee snapshot
+          j = null;
         }
-      } else {
-        list.textContent = 'No fees loaded or permission denied';
       }
-    } catch (e) {
-      console.error('loadFees', e);
+
+      if (j && j.ok && j.fees) {
+        renderFeeObject(j.fees);
+        return;
+      }
+
+      if (j && Array.isArray(j)) {
+        // array of rows
+        const map = {};
+        j.forEach(r => {
+          if (r.key_name) map[r.key_name] = r.value_decimal || r.value_text || r.value;
+          else if (r.key) map[r.key] = r.value;
+        });
+        renderFeeObject(map);
+        return;
+      }
+
+      // fallback: fetch calc with zero to get feeSettings (payments/calc returns feeSettings)
+      try {
+        const calc = await fetchJSON('/payments/calc?messaging_mode=semi&expected_users=0&expected_bookings_per_day=0');
+        if (calc && calc.feeSettings) {
+          renderFeeObject(calc.feeSettings);
+          return;
+        }
+      } catch (e) {
+        // ignore and show error
+      }
+
+      feeDisplay.textContent = 'Unable to load fee settings from server';
+    } catch (err) {
+      feeDisplay.textContent = 'Error loading fees: ' + (err && err.message || err);
     }
   }
 
-  document.getElementById('btnSaveFee').addEventListener('click', async () => {
-    const key = document.getElementById('fee_key').value.trim();
-    const value = document.getElementById('fee_value').value.trim();
-    if (!key) { alert('Enter key'); return; }
+  function renderFeeObject(map) {
+    if (!map || Object.keys(map).length === 0) {
+      feeDisplay.textContent = 'No fee settings found';
+      return;
+    }
+    const lines = [];
+    const preferredOrder = ['annual_fee','monthly_platform_fee_per_user','message_cost_per_booking','free_trial_days'];
+    preferredOrder.forEach(k => {
+      if (k in map) lines.push(`${k} = ${map[k]}`);
+    });
+    Object.keys(map).forEach(k => { if (!preferredOrder.includes(k)) lines.push(`${k} = ${map[k]}`); });
+    feeDisplay.textContent = lines.join('\n');
+  }
+
+  btnSaveFee.addEventListener('click', async () => {
+    clearError();
+    const k = (feeKey.value || '').trim();
+    const v = (feeValue.value || '').trim();
+    if (!k) { showError('Enter fee key'); return; }
+    if (v === '') { showError('Enter a value'); return; }
     try {
-      const r = await fetch(base + '/admin/fees', {
-        method: 'PUT',
-        headers: { 'Content-Type':'application/json', Authorization: 'Bearer ' + token },
-        body: JSON.stringify({ key, value })
-      });
-      const j = await r.json();
-      if (!r.ok || !j.ok) alert('Save failed: ' + (j && j.error));
-      else {
-        alert('Saved');
-        loadFees();
+      const body = { key: k, value: v };
+      const resp = await fetchJSON('/admin/fees', { method: 'PUT', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } });
+      if (resp && resp.ok) {
+        feeKey.value = ''; feeValue.value = '';
+        notice.style.display = 'block';
+        notice.textContent = 'Saved successfully (server response OK).';
+        setTimeout(()=>notice.style.display='none', 4000);
+        await loadFees();
+      } else {
+        showError('Save failed: ' + JSON.stringify(resp));
       }
-    } catch (e) {
-      alert('Save error: ' + e.message);
+    } catch (err) {
+      showError('Save failed: ' + (err.body || err.message || err));
     }
   });
 
-  document.getElementById('btnPreview').addEventListener('click', async () => {
+  btnCalc.addEventListener('click', async () => {
+    clearError();
+    calcResult.textContent = '...';
+    calcMsg.textContent = 'Fetching server-side calculation...';
+    const mode = modeEl.value;
+    const users = Number(usersEl.value || 0);
+    const bookings = Number(bookingsDayEl.value || 0);
     try {
-      const mode = document.getElementById('preview_mode').value;
-      const users = Number(document.getElementById('preview_users').value || 0);
-      const bookings = Number(document.getElementById('preview_bookings').value || 0);
-      const r = await fetch(base + '/admin/fees', { headers: { Authorization: 'Bearer ' + token }});
-      const j = await r.json();
-      if (!r.ok || !j.ok) { alert('Cannot load fees'); return; }
-      const fees = {};
-      for (const k of Object.keys(j.fees)) {
-        fees[k] = j.fees[k].value_decimal !== null ? Number(j.fees[k].value_decimal) : null;
+      const url = `/payments/calc?messaging_mode=${encodeURIComponent(mode)}&expected_users=${encodeURIComponent(users)}&expected_bookings_per_day=${encodeURIComponent(bookings)}`;
+      const j = await fetchJSON(url);
+      if (!j || !j.ok) {
+        calcResult.textContent = 'Error';
+        calcMsg.textContent = 'Server returned invalid response';
+        return;
       }
-      let amount = 0;
-      if (mode === 'semi') {
-        amount = (fees['annual_fee'] || 0) + users * (fees['monthly_platform_fee_per_user'] || 0);
-      } else {
-        const monthly_platform_total = users * (fees['monthly_platform_fee_per_user'] || 0);
-        const estimated_message_cost_30 = bookings * (fees['message_cost_per_booking'] || 0) * 30;
-        amount = monthly_platform_total + estimated_message_cost_30;
-      }
-      document.getElementById('preview_result').textContent = 'Estimated initial amount: ₹' + amount;
-    } catch (e) { console.error('preview error', e); alert('Error calculating preview'); }
+      const rupees = Number(j.amount_rupees || 0);
+      calcResult.textContent = '₹' + rupees;
+      calcMsg.textContent = 'Calculation from server (uses current fee_settings)';
+    } catch (err) {
+      calcResult.textContent = '—';
+      calcMsg.textContent = 'Calculation failed: ' + (err && err.message ? err.message : 'unknown');
+    }
   });
 
-  loadFees();
+  // initial load
+  await loadFees();
+
 })();
-</script>
-
-  <h1>Organization setup</h1>
-  <div class="card">
-    <div id="loggedIn" class="muted">Logged in as ...</div>
-    <h3>Organization Details</h3>
-    <label>Name</label><input id="orgName">
-    <label>Location</label><input id="orgLocation">
-    <label>Services</label><textarea id="orgServices"></textarea>
-    <label>Photo URL (public)</label><input id="orgPhoto" placeholder="https://...">
-    <button id="btnSaveOrg">Save Organization</button>
-    <div id="orgMsg"></div>
-  </div>
-
-  <div class="card">
-    <h3>Or — Search existing organization (admin)</h3>
-    <label>Search by id or name</label><input id="searchOrgQ"><button id="btnSearchOrg">Search</button>
-    <div id="searchResults"></div>
-  </div>
-
-  <div class="card">
-    <h3>Add Assigned / Receptionist</h3>
-    <div class="muted">Selected organization: <span id="selectedOrg">None</span></div>
-    <label>Role</label>
-    <select id="userRole"><option value="assigned">Assigned user</option><option value="receptionist">Receptionist</option></select>
-    <label>Name</label><input id="userName">
-    <label>Email</label><input id="userEmail">
-    <label>Department</label><input id="userDept">
-    <button id="btnInvite">Send Invite</button>
-    <div id="inviteMsg"></div>
-  </div>
-
-  <div style="margin-top:10px">
-    <button id="btnSkip">Skip and Continue to Bookings</button>
-  </div>
-
-<script>
-const base=window.location.origin;
-let me=null,selectedOrgId=null;
-
-function getToken(){return localStorage.getItem('accessToken')||'';}
-function headers(){return {'Content-Type':'application/json','Authorization':'Bearer '+getToken()};}
-
-async function whoami(){
-  const t=getToken(); if(!t) return window.location='/index.html';
-  try{
-    const r=await fetch(base+'/auth/me',{headers:{Authorization:'Bearer '+t}});
-    if(!r.ok) return window.location='/index.html';
-    const j=await r.json(); if(!j.ok) return window.location='/index.html';
-    me=j.user; document.getElementById('loggedIn').innerText=`Logged in as ${me.name} (${me.role})`;
-    if(me.org_id){selectedOrgId=me.org_id;document.getElementById('selectedOrg').innerText='Org ID: '+me.org_id;}
-  }catch(e){window.location='/index.html';}
-}
-whoami();
-
-document.getElementById('btnSaveOrg').onclick=async()=>{
-  const name=orgName.value.trim(),location=orgLocation.value.trim(),services=orgServices.value.trim(),photo=orgPhoto.value.trim();
-  const msg=orgMsg; msg.textContent='Saving...';
-  try{
-    const r=await fetch(base+'/organizations',{method:'POST',headers:headers(),body:JSON.stringify({name,location,services,photo})});
-    const j=await r.json(); if(!r.ok){msg.style.color='red';msg.textContent=JSON.stringify(j);return;}
-    selectedOrgId=j.id; msg.style.color='green'; msg.textContent='Organization saved! id='+j.id;
-    selectedOrg.textContent='Org ID: '+j.id;
-  }catch(e){msg.style.color='red';msg.textContent=e.message;}
-};
-
-btnSearchOrg.onclick=async()=>{
-  const q=searchOrgQ.value.trim(); if(!q)return;
-  const r=await fetch(base+'/organizations?q='+encodeURIComponent(q),{headers:{Authorization:'Bearer '+getToken()}});
-  const j=await r.json(); const el=searchResults; el.innerHTML='';
-  if(!j.ok)return el.textContent=JSON.stringify(j);
-  j.organizations.forEach(o=>{
-    const div=document.createElement('div');
-    div.innerHTML=`<b>${o.name}</b> (${o.location||''}) — id:${o.id} <button data-id="${o.id}">Select</button>`;
-    el.appendChild(div);
-    div.querySelector('button').onclick=()=>{selectedOrgId=o.id;selectedOrg.textContent='Org ID:'+o.id+' - '+o.name;};
-  });
-};
-
-btnInvite.onclick=async()=>{
-  const name=userName.value.trim(),email=userEmail.value.trim(),department=userDept.value.trim(),role=userRole.value;
-  const msg=inviteMsg; if(!selectedOrgId){msg.style.color='red';msg.textContent='Select org first';return;}
-  try{
-    const r=await fetch(base+'/users/invite',{method:'POST',headers:headers(),body:JSON.stringify({name,email,department,role,org_id:selectedOrgId})});
-    const j=await r.json(); if(!r.ok){msg.style.color='red';msg.textContent=JSON.stringify(j);return;}
-    msg.style.color='green'; msg.textContent=j.msg||'Invite sent';
-  }catch(e){msg.style.color='red';msg.textContent=e.message;}
-};
-
-btnSkip.onclick=async()=>{
-  const r=await fetch(base+'/auth/me',{headers:{Authorization:'Bearer '+getToken()}});
-  if(!r.ok)return window.location='/index.html';
-  const j=await r.json(); const u=j.user;
-  if(u.role==='organization_admin'&&!u.org_id){alert('Organization admin must create an organization first.');return;}
-  window.location='/bookings.html';
-};
 </script>
 </body>
 </html>
