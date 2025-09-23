@@ -1,0 +1,83 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Booking details</title>
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;padding:20px}
+    .card{max-width:900px;margin:0 auto;background:#fff;padding:20px;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.06)}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Booking details</h2>
+    <div id="bookingInfo">Loading…</div>
+    <hr>
+    <h3>History / Notes</h3>
+    <div id="notesList">Loading…</div>
+    <hr>
+    <h4>Add a note</h4>
+    <textarea id="noteText" rows="4" style="width:100%"></textarea><br>
+    <button id="saveNote">Save note</button>
+    <p id="saveNoteMsg"></p>
+    <p><a href="/bookings.html">Back to bookings</a></p>
+  </div>
+
+  <script>
+  const params = new URLSearchParams(location.search);
+  const id = params.get('id');
+  if(!id) document.getElementById('bookingInfo').innerText = 'No id provided';
+  async function load() {
+    const token = localStorage.getItem('accessToken');
+    const r = await fetch('/bookings/' + id, { headers: token ? { 'Authorization': 'Bearer ' + token } : {} });
+    const json = await r.json();
+    if(!json.ok) return document.getElementById('bookingInfo').innerText = 'Error: ' + (json.error || JSON.stringify(json));
+    const b = json.booking;
+    document.getElementById('bookingInfo').innerHTML = `
+      <b>Id:</b> ${b.id}<br>
+      <b>Org:</b> ${b.org_name || b.org_id}<br>
+      <b>Assigned:</b> ${b.assigned_name || b.assigned_user_id}<br>
+      <b>Phone:</b> ${b.user_phone}<br>
+      <b>Date:</b> ${b.booking_date} ${b.booking_time || ''}<br>
+      <b>Token:</b> ${b.token_no}<br>
+      <b>Status:</b> ${b.status}<br>
+      <b>Notes:</b> ${b.notes || ''}
+    `;
+
+    const notesResp = await fetch('/bookings/' + id + '/notes', { headers: token ? { 'Authorization': 'Bearer ' + token } : {} });
+    const notesJson = await notesResp.json();
+    const nl = document.getElementById('notesList');
+    nl.innerHTML = '';
+    if(notesJson.ok && notesJson.notes.length) {
+      notesJson.notes.forEach(n => {
+        const div = document.createElement('div');
+        div.style.borderBottom = '1px solid #eee';
+        div.style.padding='8px 0';
+        div.innerHTML = `<b>${n.created_at}</b><div>${n.text}</div>`;
+        nl.appendChild(div);
+      });
+    } else {
+      nl.innerText = 'No notes';
+    }
+  }
+
+  document.getElementById('saveNote').addEventListener('click', async () => {
+    const text = document.getElementById('noteText').value.trim();
+    if(!text) return alert('enter note');
+    const token = localStorage.getItem('accessToken');
+    const resp = await fetch('/bookings/' + id + '/notes', {
+      method: 'POST',
+      headers: token ? { 'Authorization': 'Bearer ' + token, 'Content-Type':'application/json' } : {'Content-Type':'application/json'},
+      body: JSON.stringify({ text })
+    });
+    const j = await resp.json();
+    if (!j.ok) return alert('save failed: ' + (j.error || JSON.stringify(j)));
+    document.getElementById('saveNoteMsg').innerText = 'Saved';
+    document.getElementById('noteText').value = '';
+    load();
+  });
+
+  load();
+  </script>
+</body>
+</html>
