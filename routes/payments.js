@@ -1,5 +1,4 @@
 // routes/payments.js
-// payments router (MySQL-friendly) for EasyQue
 const express = require('express');
 const crypto = require('crypto');
 const Razorpay = require('razorpay');
@@ -17,25 +16,27 @@ const razorpay = new Razorpay({
 });
 
 async function loadFeeSettings() {
-  const rows = await db.query('SELECT key_name, value_decimal FROM fee_settings');
+  const rows = await db.query('SELECT key_name, value_decimal, value_text FROM fee_settings');
   const map = {};
   if (Array.isArray(rows)) {
     rows.forEach(r => {
-      map[r.key_name] = parseFloat(r.value_decimal || 0);
+      if (r.value_decimal !== null && r.value_decimal !== undefined && r.value_decimal !== '') map[r.key_name] = Number(r.value_decimal);
+      else map[r.key_name] = r.value_text !== undefined && r.value_text !== null ? r.value_text : null;
     });
   }
   return map;
 }
 
 /**
- * Payment calculation
+ * Calculate rupees amount according to your rules:
  * - semi: initial = annual_fee + (expected_users * monthly_platform_fee_per_user)
- * - full: initial = estimated_message_cost_for_30_days only (per your rule)
+ * - full: initial = (expected_bookings_per_day * message_cost_per_booking * 30) + trial_extra(if any)
  */
 function calculateAmountRupees(payload = {}, feeSettings = {}) {
   const messaging_mode = payload.messaging_mode || 'semi';
   const expected_users = Number(payload.expected_users || 0);
   const expected_bookings_per_day = Number(payload.expected_bookings_per_day || 0);
+  const trial_message_count = Number(payload.trial_message_count || 0);
 
   const annual_fee = Number(feeSettings['annual_fee'] || 0);
   const monthly_platform_fee_per_user = Number(feeSettings['monthly_platform_fee_per_user'] || 0);
@@ -43,20 +44,16 @@ function calculateAmountRupees(payload = {}, feeSettings = {}) {
 
   if (messaging_mode === 'semi') {
     const initial = annual_fee + (expected_users * monthly_platform_fee_per_user);
-    return Math.max(0, initial);
+    return Math.max(0, Math.round(initial));
   } else {
-    // FULL-AUTOMATIC: initial is only estimated message cost for first 30 days
     const estimated_message_cost_30 = expected_bookings_per_day * message_cost_per_booking * 30;
-    // Optional: add trial extra if provided
-    const trial_message_count = Number(payload.trial_message_count || 0);
     const trial_extra = trial_message_count * message_cost_per_booking;
     const initial = estimated_message_cost_30 + trial_extra;
-    return Math.max(0, initial);
+    return Math.max(0, Math.round(initial));
   }
 }
 
 // GET /payments/calc?messaging_mode=full&expected_users=10&expected_bookings_per_day=500
-// Debug endpoint only — returns what the server will charge (rupees)
 router.get('/calc', async (req, res) => {
   try {
     const { messaging_mode, expected_users, expected_bookings_per_day, trial_message_count } = req.query || {};
@@ -69,7 +66,7 @@ router.get('/calc', async (req, res) => {
     }, feeSettings);
     return res.json({ ok: true, amount_rupees, feeSettings });
   } catch (err) {
-    console.error('GET /payments/calc error', err && err.message);
+    console.error('GET /payments/calc error', err && err.stack ? err.stack : err);
     return res.status(500).json({ ok: false, error: 'server error', details: err && err.message });
   }
 });
@@ -107,8 +104,8 @@ router.post('/create-order', async (req, res) => {
       (org_id, user_id, amount, currency, details, status, created_at, updated_at)
       VALUES (?, ?, ?, 'INR', ?, 'pending', NOW(), NOW())`;
     const insertParams = [org_id, user_id, amount_rupees, JSON.stringify(detailsObj)];
-
     const insertRes = await db.query(insertSql, insertParams);
+
     const insertId = insertRes && (insertRes.insertId || (Array.isArray(insertRes) && insertRes[0] && insertRes[0].insertId)) ? (insertRes.insertId || insertRes[0].insertId) : (insertRes && insertRes.insertId ? insertRes.insertId : null);
 
     const orderOptions = {
@@ -186,7 +183,7 @@ router.post('/verify', async (req, res) => {
   }
 });
 
-// webhookHandler for raw webhook
+// webhookHandler
 async function webhookHandler(req, res) {
   try {
     const signature = req.headers['x-razorpay-signature'] || req.headers['x_razorpay_signature'] || '';
@@ -206,7 +203,7 @@ async function webhookHandler(req, res) {
     try { event = JSON.parse(body); } catch (e) { event = req.body; }
     const eventType = (event.event || '').toLowerCase();
 
-    if (eventType === 'payment.captured' || eventType === 'payment.authorized' || eventType === 'payment.failed') {
+    if (eventType.startsWith('payment.')) {
       const payloadPayment = (event.payload && event.payload.payment && event.payload.payment.entity) || null;
       if (!payloadPayment) {
         console.warn('Webhook payment event missing payload', event);
