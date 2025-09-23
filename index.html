@@ -1,0 +1,158 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>EasyQue - Login</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root { --bg:#f6f8fa; --card:#fff; --primary:#0b5cff; --muted:#666; }
+    body { font-family: Inter, Arial, sans-serif; background:var(--bg); margin:0; padding:28px; display:flex; justify-content:center; }
+    .container { width:420px; }
+    .card { background:var(--card); padding:20px; border-radius:10px; border:1px solid #e6e9ee; box-shadow:0 6px 18px rgba(22,30,40,0.04); }
+    h1 { margin:0 0 8px 0; font-size:20px; }
+    label { display:block; margin-top:12px; font-weight:600; color:#222; }
+    input { width:100%; padding:10px; margin-top:6px; border-radius:8px; border:1px solid #d6dbe6; box-sizing:border-box; }
+    button { margin-top:14px; width:100%; padding:10px; border-radius:8px; border:0; background:var(--primary); color:#fff; font-weight:600; cursor:pointer; }
+    .muted { margin-top:10px; color:var(--muted); font-size:13px; }
+    .small { font-size:12px; color:#999; margin-top:8px; }
+    .link { color:var(--primary); cursor:pointer; text-decoration:underline; }
+    #msg { margin-top:10px; color:green; font-size:13px; }
+    .error { color:#c0392b; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>EasyQue — Login</h1>
+
+      <label for="email">Email</label>
+      <input id="email" type="email" placeholder="you@example.com" value="easyque0@gmail.com">
+
+      <label for="password">Password</label>
+      <input id="password" type="password" placeholder="Password" value="MyLefin@141">
+
+      <button id="btnLogin">Login</button>
+
+      <button id="btnGotoSignup" style="margin-top:10px; background:#fff;color:#0b5cff;border:1px solid #d6dbe6;padding:10px;border-radius:8px; cursor:pointer;">
+        Sign Up
+      </button>
+
+      <div id="msg" class="small"></div>
+
+      <div class="muted" style="margin-top:12px;">
+        <span id="extraLinks"></span>
+      </div>
+    </div>
+  </div>
+
+<script>
+/*
+  index.html login script (robust)
+  - reads response text first then attempts JSON.parse
+  - shows server HTML or JSON error messages clearly
+*/
+
+const base = window.location.origin;
+const emailEl = document.getElementById('email');
+const passEl = document.getElementById('password');
+const btn = document.getElementById('btnLogin');
+const msg = document.getElementById('msg');
+const extra = document.getElementById('extraLinks');
+
+function showMsg(text, isError=false) {
+  msg.textContent = text;
+  msg.className = isError ? 'small error' : 'small';
+}
+
+function saveAuth(accessToken, user) {
+  localStorage.setItem('accessToken', accessToken);
+  localStorage.setItem('currentUser', JSON.stringify(user));
+  localStorage.setItem('auth_ts', String(Date.now()));
+}
+
+function clearAuth() {
+  localStorage.removeItem('accessToken');
+  localStorage.removeItem('currentUser');
+  localStorage.removeItem('auth_ts');
+}
+
+function afterLogin(user, accessToken) {
+  saveAuth(accessToken, user);
+  if (user.role === 'admin' || user.role === 'organization_admin') {
+    window.location = '/org.html';
+  } else {
+    window.location = '/bookings.html';
+  }
+}
+
+async function tryAutoLogin() {
+  const token = localStorage.getItem('accessToken');
+  if (!token) return;
+  try {
+    const r = await fetch(base + '/auth/me', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!r.ok) { clearAuth(); return; }
+    const j = await r.json();
+    if (j && j.ok && j.user) {
+      // token valid -> redirect according to role (no flicker)
+      afterLogin(j.user, token);
+    }
+  } catch (err) {
+    console.warn('Auto login check failed', err);
+  }
+}
+
+btn.addEventListener('click', async () => {
+  const email = emailEl.value.trim();
+  const password = passEl.value;
+  if (!email || !password) { showMsg('Email and password required', true); return; }
+  showMsg('Logging in...');
+  try {
+    const r = await fetch(base + '/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+
+    // read text first so we can handle HTML error pages too
+    const text = await r.text();
+    let j;
+    try {
+      j = text ? JSON.parse(text) : {};
+    } catch (parseErr) {
+      // server returned non-JSON (likely HTML stack trace or error page)
+      throw new Error('Server returned non-JSON response: ' + text);
+    }
+
+    if (!r.ok) {
+      showMsg('Login failed: ' + (j.error || JSON.stringify(j)), true);
+      return;
+    }
+
+    const { user, accessToken } = j;
+    if (!user || !accessToken) { showMsg('Invalid login response', true); return; }
+    showMsg('Logged in as ' + user.name + ' (' + user.role + ')');
+    setTimeout(() => afterLogin(user, accessToken), 250);
+  } catch (err) {
+    showMsg('Network / server error: ' + err.message, true);
+  }
+});
+
+document.getElementById('btnGotoSignup').addEventListener('click', () => {
+  window.location = '/signup.html';
+});
+
+// clickable mailto with subject & body prefilled
+function renderExtraLinks() {
+  const mail = 'easyque0@gmail.com';
+  const subject = encodeURIComponent('EasyQue account request');
+  const body = encodeURIComponent('Hello EasyQue team,%0A%0AI would like to request an account for EasyQue.%0A%0AName:%0APhone:%0AOrganization (if any):%0A%0AThanks.');
+  extra.innerHTML = `<a class="link" href="mailto:${mail}?subject=${subject}&body=${body}">Need an account? Contact ${mail}</a>`;
+}
+
+renderExtraLinks();
+tryAutoLogin();
+</script>
+</body>
+</html>
