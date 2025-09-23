@@ -30,8 +30,7 @@ async function loadFeeSettings() {
 /**
  * Payment calculation
  * - semi: initial = annual_fee + (expected_users * monthly_platform_fee_per_user)
- * - full: initial = estimated_message_cost_for_30_days only (per your request)
- *   (optional extra_charge: trial_message_count * message_cost_per_booking if provided)
+ * - full: initial = estimated_message_cost_for_30_days only (per your rule)
  */
 function calculateAmountRupees(payload = {}, feeSettings = {}) {
   const messaging_mode = payload.messaging_mode || 'semi';
@@ -48,13 +47,32 @@ function calculateAmountRupees(payload = {}, feeSettings = {}) {
   } else {
     // FULL-AUTOMATIC: initial is only estimated message cost for first 30 days
     const estimated_message_cost_30 = expected_bookings_per_day * message_cost_per_booking * 30;
-    // Optional: if client passes trial_message_count (messages sent during trial conversion), add charge
+    // Optional: add trial extra if provided
     const trial_message_count = Number(payload.trial_message_count || 0);
     const trial_extra = trial_message_count * message_cost_per_booking;
     const initial = estimated_message_cost_30 + trial_extra;
     return Math.max(0, initial);
   }
 }
+
+// GET /payments/calc?messaging_mode=full&expected_users=10&expected_bookings_per_day=500
+// Debug endpoint only — returns what the server will charge (rupees)
+router.get('/calc', async (req, res) => {
+  try {
+    const { messaging_mode, expected_users, expected_bookings_per_day, trial_message_count } = req.query || {};
+    const feeSettings = await loadFeeSettings();
+    const amount_rupees = calculateAmountRupees({
+      messaging_mode,
+      expected_users: Number(expected_users || 0),
+      expected_bookings_per_day: Number(expected_bookings_per_day || 0),
+      trial_message_count: Number(trial_message_count || 0)
+    }, feeSettings);
+    return res.json({ ok: true, amount_rupees, feeSettings });
+  } catch (err) {
+    console.error('GET /payments/calc error', err && err.message);
+    return res.status(500).json({ ok: false, error: 'server error', details: err && err.message });
+  }
+});
 
 // POST /payments/create-order
 router.post('/create-order', async (req, res) => {
@@ -227,5 +245,3 @@ async function webhookHandler(req, res) {
 }
 
 module.exports = { router, webhookHandler };
-
-
