@@ -2,15 +2,16 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Set up your account</title>
+  <title>Set up your account — EasyQue</title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <style>
-    body{font-family:Arial,sans-serif;padding:20px;background:#f4f7fb}
-    .card{max-width:520px;margin:40px auto;background:#fff;padding:18px;border-radius:10px;border:1px solid #eee}
-    label{display:block;margin-top:10px;font-weight:600}
+    body{font-family:Arial,Helvetica,sans-serif;background:#f4f7fb;padding:40px}
+    .card{max-width:700px;margin:20px auto;background:#fff;padding:24px;border-radius:10px;border:1px solid #eee}
+    label{font-weight:700;margin-top:12px;display:block}
     input{width:100%;padding:10px;margin-top:6px;border-radius:6px;border:1px solid #ddd}
-    button{margin-top:12px;padding:10px;border-radius:8px;border:0;background:#1765d6;color:#fff;cursor:pointer;width:100%}
-    .muted{color:#666;margin-top:8px}
+    .btn{background:#1161d8;color:#fff;padding:12px;border-radius:8px;border:0;margin-top:14px;cursor:pointer}
+    .error{color:#b30;margin-top:8px}
+    .success{color:#0a0;margin-top:8px}
   </style>
 </head>
 <body>
@@ -19,41 +20,81 @@
     <p class="muted">Enter email & password to continue</p>
 
     <label>Name</label>
-    <input id="name" placeholder="Full name">
+    <input id="name" value="">
 
     <label>Email</label>
-    <input id="email" type="email">
+    <input id="email" value="">
 
     <label>Password</label>
-    <input id="password" type="password">
-    <button id="btnCreate">Create Account</button>
+    <input id="password" type="password" value="">
 
-    <div id="msg" class="muted"></div>
+    <input id="billing_id" type="hidden">
+    <input id="external_order_id" type="hidden">
+
+    <button id="btnCreate" class="btn">Create Account</button>
+    <div id="msg" class=""></div>
   </div>
 
 <script>
-const base = window.location.origin;
-const params = new URLSearchParams(location.search);
-const trialId = params.get('trial_id') || '';
-document.getElementById('btnCreate').addEventListener('click', async () => {
-  const name = document.getElementById('name').value.trim();
-  const email = document.getElementById('email').value.trim();
-  const password = document.getElementById('password').value;
-  if (!email || !password) { alert('Email and password required'); return; }
-  try {
-    const r = await fetch(base + '/signup/complete', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ trial_id: trialId, name, email, password })
-    });
-    const j = await r.json();
-    if (!r.ok || !j.ok) { alert('Create account failed: ' + (j.error || JSON.stringify(j))); return; }
-    alert('Account created. Please login.');
-    window.location = '/index.html';
-  } catch (err) {
-    alert('Network error: ' + err.message);
-  }
-});
+(async function(){
+  const base = window.location.origin;
+  const q = new URLSearchParams(window.location.search);
+  const billingId = q.get('billing_id') || q.get('billingId') || '';
+  const extOrder = q.get('order_id') || q.get('order') || '';
+
+  if (billingId) document.getElementById('billing_id').value = billingId;
+  if (extOrder) document.getElementById('external_order_id').value = extOrder;
+
+  // option: prefill from earlier
+  document.getElementById('name').value = q.get('name') || document.getElementById('name').value;
+  document.getElementById('email').value = q.get('email') || document.getElementById('email').value;
+
+  const msgEl = document.getElementById('msg');
+  function setMsg(t, cls) { msgEl.className = cls || ''; msgEl.textContent = t || ''; }
+
+  document.getElementById('btnCreate').addEventListener('click', async () => {
+    setMsg('Creating account...', '');
+    const payload = {
+      name: document.getElementById('name').value.trim(),
+      email: document.getElementById('email').value.trim(),
+      password: document.getElementById('password').value,
+      billing_id: document.getElementById('billing_id').value || null,
+      external_order_id: document.getElementById('external_order_id').value || null,
+      messaging_mode: q.get('messaging_mode') || 'semi',
+      expected_users: q.get('expected_users') || null,
+      expected_bookings_per_day: q.get('expected_bookings_per_day') || null,
+      signup_option: q.get('signup_option') || 'signup_now'
+    };
+
+    if (!payload.name || !payload.email || !payload.password) {
+      setMsg('Please fill name, email and password', 'error');
+      return;
+    }
+
+    try {
+      const r = await fetch(base + '/signup/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j) {
+        setMsg('Create account failed: ' + (j && j.error ? j.error : 'server error'), 'error');
+        return;
+      }
+      if (!j.ok) {
+        setMsg('Create account failed: ' + (j.error || JSON.stringify(j)), 'error');
+        return;
+      }
+      setMsg('Account created successfully. Redirecting to dashboard...', 'success');
+      // Optionally store token or redirect to login page
+      setTimeout(() => { window.location = '/index.html'; }, 1200);
+    } catch (e) {
+      setMsg('Create account failed: ' + (e && e.message), 'error');
+    }
+  });
+})();
 </script>
 </body>
 </html>
+
