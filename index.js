@@ -1,7 +1,4 @@
-// index.js (bcrypt-only login)
-// Replace your index.js with this version once you have migrated all plaintext passwords.
-// This file still mounts payments/signup/admin routers if they exist.
-
+// index.js
 require('dotenv').config();
 const path = require('path');
 const express = require('express');
@@ -19,8 +16,8 @@ let signupRouter = null;
 try { signupRouter = require('./routes/signup'); } catch (e) { console.warn('signup router load failed', e && e.message); }
 let adminRouter = null;
 try { adminRouter = require('./routes/admin'); } catch (e) { console.warn('admin router load failed', e && e.message); }
-let authRouter = null;
-try { authRouter = require('./routes/auth'); } catch (e) { /* optional */ }
+let organizationsRouter = null;
+try { organizationsRouter = require('./routes/organizations'); } catch (e) { console.warn('organizations router load failed', e && e.message); }
 
 // minimal JWT auth middleware fallback
 let requireAuth = (req, res, next) => {
@@ -68,7 +65,7 @@ async function findUserByEmail(email) {
   return Array.isArray(rows) ? rows[0] : rows;
 }
 
-// POST /auth/login -> bcrypt-only
+// POST /auth/login -> bcrypt-only (assumes migration completed)
 app.post('/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body || {};
@@ -119,10 +116,25 @@ if (paymentsModule) {
 }
 if (signupRouter) app.use('/signup', signupRouter);
 if (adminRouter) app.use('/admin', adminRouter);
-if (authRouter) app.use('/auth', authRouter);
+if (organizationsRouter) app.use('/organizations', organizationsRouter);
+
+// debug endpoint to inspect a user (safe short info)
+app.get('/_debug/user', async (req, res) => {
+  try {
+    const email = req.query.email;
+    if (!email) return res.status(400).json({ ok: false, error: 'email required' });
+    const rows = await db.query('SELECT id, email, password IS NOT NULL AS has_password, password_hash IS NOT NULL AS has_password_hash, role, org_id, created_at FROM users WHERE email = ? LIMIT 1', [email]);
+    const user = Array.isArray(rows) ? rows[0] : rows;
+    if (!user) return res.status(404).json({ ok: false, error: 'not found' });
+    return res.json({ ok: true, user });
+  } catch (e) {
+    console.error('_debug/user error', e && e.message);
+    return res.status(500).json({ ok: false, error: 'server error' });
+  }
+});
 
 app.use((req, res, next) => {
-  if (req.path.startsWith('/auth') || req.path.startsWith('/payments') || req.path.startsWith('/signup') || req.path.startsWith('/admin')) {
+  if (req.path.startsWith('/auth') || req.path.startsWith('/payments') || req.path.startsWith('/signup') || req.path.startsWith('/admin') || req.path.startsWith('/organizations')) {
     return res.status(404).json({ ok: false, error: 'not found' });
   }
   next();
