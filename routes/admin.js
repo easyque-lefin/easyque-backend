@@ -1,80 +1,77 @@
 // routes/admin.js
-// Admin-only routes for fee settings (MySQL friendly)
-// - GET /admin/fees
-// - PUT /admin/fees
-
 const express = require('express');
 const db = require('../db');
+const jwt = require('jsonwebtoken');
 
-let requireAuth, requireRole;
-try {
-  const authMw = require('../middleware/auth');
-  requireAuth = authMw.requireAuth;
-  requireRole = authMw.requireRole;
-} catch (e) {
-  // fallback middleware if your middleware isn't available
-  const jwt = require('jsonwebtoken');
-  requireAuth = (req, res, next) => {
-    const auth = req.headers.authorization || '';
-    const m = auth.match(/^Bearer\s+(.+)$/i);
-    if (!m) return res.status(401).json({ ok: false, error: 'missing token' });
-    const token = m[1];
-    try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
-      req.user = decoded;
-      return next();
-    } catch (err) {
-      return res.status(401).json({ ok: false, error: 'invalid token' });
-    }
-  };
-  requireRole = role => (req, res, next) => {
+const router = express.Router();
+const JWT_SECRET = process.env.JWT_SECRET || 'devsecret';
+
+// Simple middleware to check JWT and role admin
+function requireAuth(req, res, next) {
+  const auth = req.headers.authorization || '';
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (!m) return res.status(401).json({ ok: false, error: 'missing token' });
+  try {
+    const decoded = jwt.verify(m[1], JWT_SECRET);
+    req.user = decoded;
+    return next();
+  } catch (e) {
+    return res.status(401).json({ ok: false, error: 'invalid token' });
+  }
+}
+function requireRole(role) {
+  return (req, res, next) => {
     if (!req.user || (req.user.role || '') !== role) return res.status(403).json({ ok: false, error: 'forbidden' });
     return next();
   };
 }
 
-const router = express.Router();
-
-router.get('/fees', requireAuth, requireRole('admin'), async (req, res) => {
+/**
+ * GET /admin/fees
+ * Return a map { key: value } using fee_settings table
+ */
+router.get('/fees', async (req, res) => {
   try {
     const rows = await db.query('SELECT key_name, value_decimal, value_text FROM fee_settings');
     const map = {};
     if (Array.isArray(rows)) {
       rows.forEach(r => {
-        map[r.key_name] = {
-          value_decimal: r.value_decimal !== null ? parseFloat(r.value_decimal) : null,
-          value_text: r.value_text || null
-        };
+        // prefer numeric decimal if present, otherwise value_text
+        if (r.value_decimal !== null && r.value_decimal !== undefined && r.value_decimal !== '') map[r.key_name] = Number(r.value_decimal);
+        else map[r.key_name] = r.value_text !== undefined && r.value_text !== null ? r.value_text : null;
       });
     }
     return res.json({ ok: true, fees: map });
   } catch (err) {
-    console.error('GET /admin/fees error', err && err.message);
-    return res.status(500).json({ ok: false, error: 'server error', details: err && err.message });
+    console.error('GET /admin/fees error', err && err.stack ? err.stack : err);
+    return res.status(500).json({ ok: false, error: 'server error' });
   }
 });
 
+/**
+ * PUT /admin/fees { key, value }
+ * Upsert into fee_settings. Protected (admin).
+ */
 router.put('/fees', requireAuth, requireRole('admin'), async (req, res) => {
   try {
     const { key, value } = req.body || {};
-    if (!key) return res.status(400).json({ ok: false, error: 'key is required' });
-    const numericValue = Number(value);
-    const isNumeric = !isNaN(numericValue) && value !== null && value !== '';
-    if (isNumeric) {
-      const sql = `INSERT INTO fee_settings (key_name, value_decimal, value_text, updated_at)
-                   VALUES (?, ?, NULL, NOW())
-                   ON DUPLICATE KEY UPDATE value_decimal = VALUES(value_decimal), value_text = NULL, updated_at = NOW()`;
-      await db.query(sql, [key, numericValue]);
-    } else {
-      const sql = `INSERT INTO fee_settings (key_name, value_decimal, value_text, updated_at)
-                   VALUES (?, NULL, ?, NOW())
-                   ON DUPLICATE KEY UPDATE value_text = VALUES(value_text), value_decimal = NULL, updated_at = NOW()`;
-      await db.query(sql, [key, String(value || '')]);
-    }
-    return res.json({ ok: true, msg: 'fee saved' });
+    if (!key) return res.status(400).json({ ok: false, error: 'key required' });
+
+    // detect numeric
+    const asNum = Number(value);
+    const isNum = !Number.isNaN(asNum) && value !== '' && value !== null;
+
+    // MySQL upsert: assumes fee_settings.key_name is PRIMARY KEY or UNIQUE
+    const sql = `INSERT INTO fee_settings (key_name, value_decimal, value_text, updated_at)
+                 VALUES (?, ?, ?, NOW())
+                 ON DUPLICATE KEY UPDATE value_decimal = VALUES(value_decimal), value_text = VALUES(value_text), updated_at = NOW()`;
+    const params = [key, isNum ? asNum : null, isNum ? null : (value !== undefined && value !== null ? String(value) : null)];
+    await db.query(sql, params);
+
+    return res.json({ ok: true, saved: { key, value } });
   } catch (err) {
-    console.error('PUT /admin/fees error', err && err.message);
-    return res.status(500).json({ ok: false, error: 'server error', details: err && err.message });
+    console.error('PUT /admin/fees error', err && err.stack ? err.stack : err);
+    return res.status(500).json({ ok: false, error: 'server error' });
   }
 });
 
