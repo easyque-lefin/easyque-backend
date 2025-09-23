@@ -18,6 +18,9 @@ const paymentsModule = safeRequire('./routes/payments');
 const signupRouter = safeRequire('./routes/signup');
 const adminRouter = safeRequire('./routes/admin');
 const organizationsRouter = safeRequire('./routes/organizations');
+const bookingsRouter = safeRequire('./routes/bookings');
+if (bookingsRouter) app.use('/bookings', bookingsRouter);
+
 
 // mount payments webhook raw BEFORE express.json()
 if (paymentsModule && typeof paymentsModule.webhookHandler === 'function') {
@@ -167,5 +170,4 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
 });
-
 
