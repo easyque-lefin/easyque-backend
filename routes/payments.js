@@ -1,9 +1,5 @@
 // routes/payments.js
-// MySQL-friendly payments router for EasyQue
-// - POST /payments/create-order
-// - POST /payments/verify
-// - webhookHandler(req,res) exported and intended to be mounted with express.raw() in index.js
-
+// payments router (MySQL-friendly) for EasyQue
 const express = require('express');
 const crypto = require('crypto');
 const Razorpay = require('razorpay');
@@ -31,6 +27,12 @@ async function loadFeeSettings() {
   return map;
 }
 
+/**
+ * Payment calculation
+ * - semi: initial = annual_fee + (expected_users * monthly_platform_fee_per_user)
+ * - full: initial = estimated_message_cost_for_30_days only (per your request)
+ *   (optional extra_charge: trial_message_count * message_cost_per_booking if provided)
+ */
 function calculateAmountRupees(payload = {}, feeSettings = {}) {
   const messaging_mode = payload.messaging_mode || 'semi';
   const expected_users = Number(payload.expected_users || 0);
@@ -44,13 +46,17 @@ function calculateAmountRupees(payload = {}, feeSettings = {}) {
     const initial = annual_fee + (expected_users * monthly_platform_fee_per_user);
     return Math.max(0, initial);
   } else {
-    const monthly_platform_total = expected_users * monthly_platform_fee_per_user;
+    // FULL-AUTOMATIC: initial is only estimated message cost for first 30 days
     const estimated_message_cost_30 = expected_bookings_per_day * message_cost_per_booking * 30;
-    const initial = monthly_platform_total + estimated_message_cost_30;
+    // Optional: if client passes trial_message_count (messages sent during trial conversion), add charge
+    const trial_message_count = Number(payload.trial_message_count || 0);
+    const trial_extra = trial_message_count * message_cost_per_booking;
+    const initial = estimated_message_cost_30 + trial_extra;
     return Math.max(0, initial);
   }
 }
 
+// POST /payments/create-order
 router.post('/create-order', async (req, res) => {
   try {
     const payload = req.body || {};
@@ -63,7 +69,7 @@ router.post('/create-order', async (req, res) => {
     const user_id = payload.user_id || null;
 
     const feeSettings = await loadFeeSettings();
-    const amount_rupees = calculateAmountRupees({ messaging_mode, expected_users, expected_bookings_per_day }, feeSettings);
+    const amount_rupees = calculateAmountRupees({ messaging_mode, expected_users, expected_bookings_per_day, trial_message_count: payload.trial_message_count }, feeSettings);
 
     if (!amount_rupees || Number(amount_rupees) <= 0) {
       return res.status(400).json({ ok: false, error: 'Calculated amount must be > 0' });
@@ -119,6 +125,7 @@ router.post('/create-order', async (req, res) => {
   }
 });
 
+// POST /payments/verify
 router.post('/verify', async (req, res) => {
   try {
     const { razorpay_payment_id, razorpay_order_id, razorpay_signature, billing_id } = req.body || {};
@@ -126,6 +133,7 @@ router.post('/verify', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Missing payment verification fields' });
     }
 
+    // verify signature using RAZORPAY_KEY_SECRET
     const h = crypto.createHmac('sha256', RAZORPAY_KEY_SECRET);
     h.update(razorpay_order_id + '|' + razorpay_payment_id);
     const expectedSignature = h.digest('hex');
@@ -160,6 +168,7 @@ router.post('/verify', async (req, res) => {
   }
 });
 
+// webhookHandler for raw webhook
 async function webhookHandler(req, res) {
   try {
     const signature = req.headers['x-razorpay-signature'] || req.headers['x_razorpay_signature'] || '';
@@ -167,7 +176,6 @@ async function webhookHandler(req, res) {
       console.warn('WEBHOOK_SECRET not set; rejecting webhook for safety');
       return res.status(500).send('webhook secret not configured');
     }
-
     const body = req.body instanceof Buffer ? req.body.toString('utf8') : (typeof req.body === 'string' ? req.body : JSON.stringify(req.body));
     const expected = crypto.createHmac('sha256', WEBHOOK_SECRET).update(body).digest('hex');
 
@@ -177,12 +185,7 @@ async function webhookHandler(req, res) {
     }
 
     let event;
-    try {
-      event = JSON.parse(body);
-    } catch (e) {
-      event = req.body;
-    }
-
+    try { event = JSON.parse(body); } catch (e) { event = req.body; }
     const eventType = (event.event || '').toLowerCase();
 
     if (eventType === 'payment.captured' || eventType === 'payment.authorized' || eventType === 'payment.failed') {
@@ -191,7 +194,6 @@ async function webhookHandler(req, res) {
         console.warn('Webhook payment event missing payload', event);
         return res.status(200).send('no payment entity');
       }
-
       const orderId = payloadPayment.order_id || null;
       const paymentId = payloadPayment.id || null;
       const status = (payloadPayment.status || '').toLowerCase();
@@ -217,7 +219,6 @@ async function webhookHandler(req, res) {
     } else {
       console.log('Unhandled webhook event:', eventType);
     }
-
     return res.json({ ok: true });
   } catch (err) {
     console.error('webhookHandler error', err && err.stack ? err.stack : err);
@@ -226,4 +227,5 @@ async function webhookHandler(req, res) {
 }
 
 module.exports = { router, webhookHandler };
+
 
