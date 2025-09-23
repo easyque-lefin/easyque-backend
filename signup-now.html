@@ -1,184 +1,115 @@
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8">
-  <title>Sign Up Now — EasyQue</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta charset="utf-8" />
+  <title>EasyQue — Sign Up Now</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    body{font-family:Arial,Helvetica,sans-serif;padding:24px;background:#f4f7fb}
-    .card{max-width:760px;margin:24px auto;background:#fff;padding:20px;border-radius:10px;border:1px solid #eee}
-    label{display:block;margin-top:12px;font-weight:600}
-    input,select{width:100%;padding:10px;margin-top:6px;border-radius:6px;border:1px solid #ddd;box-sizing:border-box}
-    .btn{background:#0b8b59;color:#fff;padding:12px;border-radius:8px;border:0;margin-top:14px;cursor:pointer;width:100%}
+    body{font-family:Arial,Helvetica,sans-serif;background:#f3f6fb;margin:0;padding:18px}
+    header{margin-bottom:18px}
+    header a{margin-right:10px;color:#0b74de;text-decoration:none;font-weight:600}
+    .card{max-width:920px;margin:6px auto;padding:22px;background:#fff;border-radius:8px;border:1px solid #eee}
+    h1{margin:0 0 12px}
+    label{display:block;margin-top:12px;font-weight:700}
+    input,select{width:100%;padding:10px;border-radius:8px;border:1px solid #ddd;margin-top:6px}
+    .radio-row{display:flex;gap:12px;align-items:center;margin-top:8px}
+    button{background:#0b74de;color:#fff;padding:10px;border-radius:8px;border:0;margin-top:12px;cursor:pointer}
+    .secondary{background:#fff;border:1px solid #0b74de;color:#0b74de}
     .muted{color:#666;margin-top:8px}
-    .row { display:flex; gap:12px; align-items:center; }
-    .small { font-size:0.9rem; color:#666; }
+    .small{font-size:13px;color:#666}
   </style>
 </head>
 <body>
+  <header>
+    <a href="index.html">Login</a>
+    <a href="signup-now.html">Sign Up</a>
+    <a href="start-trial.html">Start 7-day Trial</a>
+    <a href="org.html">Organization / Fees</a>
+  </header>
+
   <div class="card">
-    <h2>Sign Up Now</h2>
-    <p>Select messaging option and enter expected numbers</p>
+    <h1>Sign Up Now</h1>
+    <p class="small">Select messaging option and enter expected numbers</p>
 
-    <label><input type="radio" name="mode" value="semi" checked> Semi-Automatic (use your phone number)</label>
-    <div id="semiBox" style="margin-left:18px;">
+    <div>
+      <label>Messaging option</label>
+      <div class="radio-row">
+        <label><input type="radio" name="mode" value="semi" checked> Semi-Automatic (use your phone)</label>
+        <label><input type="radio" name="mode" value="full"> Full-Automatic (we send messages)</label>
+      </div>
+
       <label>Number of users (organization)</label>
-      <input id="semi_users" type="number" value="10" min="0" step="1">
+      <input id="numUsers" type="number" value="10">
+
+      <label>Expected bookings per day (organization) (full mode only)</label>
+      <input id="expectedBookings" type="number" value="500">
+
+      <label>Email (for account)</label>
+      <input id="email" type="email" placeholder="you@example.com">
+
+      <label>Name (optional)</label>
+      <input id="name" type="text" placeholder="Organization name or your name">
+
+      <div style="display:flex;gap:12px;align-items:center;margin-top:14px">
+        <button id="btnContinue">Continue to payment</button>
+        <button id="btnStartTrial" class="secondary">Start your 7 days free trial</button>
+      </div>
+
+      <div id="msg" class="muted"></div>
     </div>
-
-    <label style="margin-top:12px"><input type="radio" name="mode" value="full"> Full-Automatic (we send messages)</label>
-    <div id="fullBox" style="margin-left:18px;">
-      <label>Number of users (organization)</label>
-      <input id="full_users" type="number" value="12" min="0" step="1">
-      <label>Expected bookings per day (organization)</label>
-      <input id="full_bookings" type="number" value="500" min="0" step="1">
-    </div>
-
-    <label>Email (for account)</label>
-    <input id="email" type="email" placeholder="you@example.com">
-
-    <label style="margin-top:10px">Name (optional)</label>
-    <input id="name" type="text" placeholder="Your name">
-
-    <button id="btnPay" class="btn">Continue to payment</button>
-    <div id="info" class="muted"></div>
   </div>
 
-  <!-- Razorpay checkout script -->
-  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<script>
+(async function(){
+  function getSelectedMode() {
+    const r = document.querySelector('input[name="mode"]:checked');
+    return r ? r.value : 'semi';
+  }
+  document.getElementById('btnStartTrial').addEventListener('click', async (e) => {
+    // navigate to start-trial page (existing page) — this preserves your original flow
+    window.location.href = 'start-trial.html';
+  });
 
-  <script>
-    (function(){
-      const base = window.location.origin;
-      const emailEl = document.getElementById('email');
-      const nameEl = document.getElementById('name');
-      const btn = document.getElementById('btnPay');
-      const info = document.getElementById('info');
+  document.getElementById('btnContinue').addEventListener('click', async () => {
+    const mode = getSelectedMode();
+    const expected_users = Number(document.getElementById('numUsers').value || 0);
+    const expected_bookings_per_day = Number(document.getElementById('expectedBookings').value || 0);
+    const email = (document.getElementById('email').value || '').trim();
+    const name = (document.getElementById('name').value || '').trim();
+    const msg = document.getElementById('msg');
+    msg.textContent = 'Calculating amount...';
 
-      function getPayload() {
-        const mode = document.querySelector('input[name="mode"]:checked').value;
-        if (mode === 'full') {
-          return {
-            messaging_mode: 'full',
-            chosen_users_count: Number(document.getElementById('full_users').value || 0),
-            expected_bookings_per_day: Number(document.getElementById('full_bookings').value || 0),
-            email: emailEl.value.trim(),
-            name: nameEl.value.trim()
-          };
-        } else {
-          return {
-            messaging_mode: 'semi',
-            chosen_users_count: Number(document.getElementById('semi_users').value || 0),
-            expected_bookings_per_day: 0,
-            email: emailEl.value.trim(),
-            name: nameEl.value.trim()
-          };
-        }
-      }
-
-      function setInfo(txt, isError) {
-        info.textContent = txt || '';
-        info.style.color = isError ? '#b03030' : '#666';
-      }
-
-      btn.addEventListener('click', async () => {
-        setInfo('');
-        const payload = getPayload();
-        if (!payload.email) { alert('Please enter an email we can use to create your account after payment.'); return; }
-
-        // Basic validation
-        if (!Number.isFinite(payload.chosen_users_count) || payload.chosen_users_count < 0) { alert('Invalid users count'); return; }
-        if (!Number.isFinite(payload.expected_bookings_per_day) || payload.expected_bookings_per_day < 0) { alert('Invalid expected bookings'); return; }
-
-        setInfo('Creating order...');
-        btn.disabled = true;
-
-        try {
-          const res = await fetch(base + '/payments/create-order', {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({
-              email: payload.email,
-              name: payload.name || '',
-              messaging_mode: payload.messaging_mode,
-              chosen_users_count: payload.chosen_users_count,
-              expected_bookings_per_day: payload.expected_bookings_per_day
-            })
-          });
-
-          const j = await res.json().catch(()=>({ ok:false, error:'invalid_json' }));
-          if (!res.ok || !j || !j.ok) {
-            const msg = (j && (j.error || j.message)) ? (j.error || j.message) : ('HTTP ' + res.status);
-            alert('Create order failed: ' + msg);
-            setInfo('');
-            btn.disabled = false;
-            return;
-          }
-
-          // j should contain { ok:true, order: {...}, razor_key_id: 'rzp_test_...' }
-          const order = j.order;
-          const keyId = j.razor_key_id || j.key_id || null;
-          if (!order || !order.id || !order.amount) {
-            alert('Invalid order returned from server');
-            setInfo('');
-            btn.disabled = false;
-            return;
-          }
-          if (!keyId) {
-            alert('Razorpay key id missing on server response. Server must return razor_key_id.');
-            setInfo('');
-            btn.disabled = false;
-            return;
-          }
-
-          // Open Razorpay Checkout
-          setInfo('Opening checkout...');
-          const options = {
-            key: keyId,
-            amount: order.amount,          // paise (integer)
-            currency: order.currency || 'INR',
-            name: 'EasyQue',
-            description: 'Signup / Billing',
-            order_id: order.id,
-            prefill: { name: payload.name || '', email: payload.email || '' },
-            notes: { receipt: order.receipt || '' },
-            handler: function (response) {
-              // response = { razorpay_payment_id, razorpay_order_id, razorpay_signature }
-              // Redirect to account setup page and pass payment and order ids so server-side can reconcile.
-              // You may optionally implement a server-side verify endpoint and call it here.
-              const paymentId = encodeURIComponent(response.razorpay_payment_id || '');
-              const orderId = encodeURIComponent(response.razorpay_order_id || '');
-              const emailParam = encodeURIComponent(payload.email || '');
-              // Pass other details if needed
-              window.location = '/set-up-account.html?order_id=' + orderId + '&payment_id=' + paymentId + '&email=' + emailParam;
-            },
-            modal: {
-              ondismiss: function() {
-                setInfo('Checkout closed without payment');
-                btn.disabled = false;
-              }
-            }
-          };
-
-          const rzp = new Razorpay(options);
-          rzp.on('payment.failed', function (resp) {
-            const err = (resp && resp.error && resp.error.description) ? resp.error.description : JSON.stringify(resp);
-            alert('Payment failed: ' + err);
-            setInfo('');
-            btn.disabled = false;
-          });
-
-          rzp.open();
-          setInfo('');
-          // After opening checkout, leave button disabled to avoid repeated opens.
-        } catch (err) {
-          console.error('Create order error', err);
-          alert('Create order error: ' + (err && err.message ? err.message : String(err)));
-          setInfo('');
-          btn.disabled = false;
-        }
+    try {
+      // call server calc to show expected amount (safe)
+      const q = new URLSearchParams({
+        messaging_mode: mode,
+        expected_users,
+        expected_bookings_per_day
       });
-    })();
-  </script>
+      const r = await fetch('/payments/calc?' + q.toString());
+      const jt = await r.json();
+      if (!r.ok || !jt.ok) {
+        msg.textContent = 'Failed to calculate: ' + (jt && jt.error ? jt.error : JSON.stringify(jt));
+        return;
+      }
+
+      const amount = jt.amount_rupees;
+      // save inputs to localStorage so set-up-account.html or payment modal can read them
+      localStorage.setItem('signup_payload', JSON.stringify({ messaging_mode: mode, expected_users, expected_bookings_per_day, email, name, amount }));
+
+      // redirect to payment modal or payment page (if you have a payment flow)
+      // simplest behavior: go to set-up-account (existing page) to continue account creation after payment flow
+      // or go to payment details page if you use Razorpay checkout there.
+      msg.textContent = 'Estimated initial amount: ₹' + amount + '. Redirecting to payment...';
+      // small delay so user sees message
+      setTimeout(()=>{ window.location.href = 'set-up-account.html'; }, 900);
+
+    } catch (err) {
+      console.error('calc error', err);
+      msg.textContent = 'Error calculating amount: ' + (err && err.message ? err.message : err);
+    }
+  });
+})();
+</script>
 </body>
 </html>
