@@ -2,242 +2,165 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Organization / Fees — EasyQue</title>
+  <title>Org / Fees — EasyQue</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
-    body { font-family:Inter,Arial,Helvetica,sans-serif; background:#f5f7fb; color:#111; padding:20px; }
-    .wrap { max-width:920px; margin:20px auto; background:#fff; border-radius:8px; padding:22px; box-shadow:0 6px 20px rgba(12,20,40,0.04); }
-    h1 { margin:0 0 12px; font-size:22px; }
-    .row { display:flex; gap:12px; align-items:center; margin-bottom:12px; }
-    input[type="text"], input[type="number"], select, textarea { width:100%; padding:10px 12px; border-radius:6px; border:1px solid #e0e6ef; box-sizing:border-box; font-size:14px; }
-    label { font-weight:600; margin-bottom:6px; display:block; }
-    button { background:#0b74de; color:#fff; border:0; padding:10px 14px; border-radius:8px; cursor:pointer; font-weight:600; }
-    .muted { color:#666; font-size:14px; margin-top:8px; }
-    .fees { white-space:pre-wrap; font-family:monospace; background:#fafafa; padding:12px; border-radius:6px; border:1px dashed #eee; }
-    .small { font-size:13px; color:#444; }
-    .inline { display:inline-block; vertical-align:middle; }
-    .form-grid { display:grid; grid-template-columns: 1fr 220px; gap:12px; align-items:end; }
-    .notice { background:#fff6d9; border:1px solid #ffe5a0; padding:10px; border-radius:6px; color:#6a4a00; margin-bottom:12px; }
-    .error { color:#a00; margin-top:8px; }
+    body{font-family:Arial,Helvetica,sans-serif;background:#f7f9fb;padding:20px}
+    .card{max-width:920px;margin:20px auto;padding:22px;background:#fff;border-radius:8px;border:1px solid #eee}
+    h1{margin:0 0 12px}
+    label{display:block;font-weight:700;margin-top:12px}
+    input,select{width:100%;padding:10px;margin-top:6px;border-radius:6px;border:1px solid #ddd}
+    button{background:#0b74de;color:#fff;border:0;padding:10px 14px;border-radius:6px;margin-top:10px;cursor:pointer}
+    .fees{white-space:pre-wrap;font-family:monospace;padding:12px;border-radius:6px;border:1px dashed #eee;background:#fafafa}
+    .muted{color:#666;margin-top:8px}
+    .inline{display:inline-block}
   </style>
 </head>
 <body>
-  <div class="wrap" id="app">
+  <div class="card">
     <h1>Fee settings</h1>
+    <div id="feeList" class="fees">Loading fee settings...</div>
 
-    <div id="notice" class="notice" style="display:none"></div>
-
-    <div id="feeDisplay" class="fees">Loading fee settings...</div>
-
-    <div style="margin-top:12px; margin-bottom:18px;">
-      <div style="display:flex; gap:10px;">
-        <input id="feeKey" type="text" placeholder="fee key (e.g. monthly_platform_fee_per_user)">
-        <input id="feeValue" type="text" placeholder="value (number)">
-        <button id="btnSaveFee">Save</button>
-      </div>
-      <div class="muted">To edit fees programmatically you can also use PUT /admin/fees (requires admin auth).</div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <input id="feeKey" placeholder="fee key (e.g. monthly_platform_fee_per_user)">
+      <input id="feeVal" placeholder="value (number or text)">
+      <button id="btnSave">Save</button>
     </div>
+
+    <div class="muted" style="margin-top:10px">To edit fees programmatically you can also use PUT /admin/fees (requires admin auth).</div>
 
     <hr style="margin:18px 0">
 
-    <h2 style="margin-top:0">View charges (sample)</h2>
-    <div style="margin-bottom:10px" class="small muted">Pick a mode and sample inputs to preview the initial amount that will be charged.</div>
+    <h2>View charges (sample)</h2>
+    <div class="muted">Pick a mode and sample inputs to preview the initial amount that will be charged.</div>
 
-    <div style="display:flex; gap:12px; margin-bottom:8px;">
+    <label>Mode</label>
+    <select id="mode">
+      <option value="semi">Semi-Automatic (use your phone)</option>
+      <option value="full">Full-Automatic (we send messages)</option>
+    </select>
+
+    <div style="display:flex;gap:12px">
       <div style="flex:1">
-        <label for="mode">Mode</label>
-        <select id="mode">
-          <option value="semi">Semi-Automatic (you use your phone)</option>
-          <option value="full">Full-Automatic (we send messages)</option>
-        </select>
+        <label>Users (org)</label>
+        <input id="users" type="number" value="10">
       </div>
-
-      <div style="width:180px">
-        <label for="users">Users (org)</label>
-        <input id="users" type="number" value="10" min="0">
+      <div style="width:300px">
+        <label>Bookings/day (full mode only)</label>
+        <input id="bookingsDay" type="number" value="500">
       </div>
     </div>
 
-    <div style="margin-bottom:12px;">
-      <label for="bookingsPerDay">Expected bookings per day (full mode only)</label>
-      <input id="bookingsPerDay" type="number" value="500" min="0">
-    </div>
-
-    <div class="form-grid">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px">
       <div>
         <button id="btnCalc">Calculate charge</button>
-        <div id="calcMsg" class="muted" style="margin-top:8px">Press calculate to fetch server-side estimate.</div>
+        <div id="calcMsg" class="muted">Press calculate to fetch server-side estimate.</div>
       </div>
       <div style="text-align:right">
-        <div style="font-size:18px; font-weight:700">Estimated initial amount:</div>
-        <div id="calcResult" style="font-size:20px; margin-top:6px">—</div>
+        <div style="font-weight:700">Estimated initial amount:</div>
+        <div style="font-size:20px;margin-top:6px" id="calcResult">—</div>
       </div>
     </div>
-
-    <div id="error" class="error" style="display:none"></div>
-
   </div>
 
 <script>
 (async function(){
-  // Helper to get saved JWT token (if any). Update if your app stores token with other key.
-  function getToken(){
-    return localStorage.getItem('accessToken') || localStorage.getItem('token') || null;
-  }
-
-  const feeDisplay = document.getElementById('feeDisplay');
-  const feeKey = document.getElementById('feeKey');
-  const feeValue = document.getElementById('feeValue');
-  const btnSaveFee = document.getElementById('btnSaveFee');
-  const btnCalc = document.getElementById('btnCalc');
-  const calcResult = document.getElementById('calcResult');
-  const calcMsg = document.getElementById('calcMsg');
-  const modeEl = document.getElementById('mode');
-  const usersEl = document.getElementById('users');
-  const bookingsDayEl = document.getElementById('bookingsPerDay');
-  const notice = document.getElementById('notice');
-  const errorEl = document.getElementById('error');
-
-  function showError(txt){ errorEl.style.display='block'; errorEl.textContent = txt; }
-  function clearError(){ errorEl.style.display='none'; errorEl.textContent = ''; }
-
-  async function fetchJSON(url, opts){
-    const token = getToken();
-    opts = opts || {};
-    opts.headers = opts.headers || {};
-    if (token) opts.headers['Authorization'] = 'Bearer ' + token;
+  function token() { return localStorage.getItem('accessToken') || null; }
+  async function fetchJSON(url, opts) {
+    opts = opts || {}; opts.headers = opts.headers || {};
+    const t = token();
+    if (t) opts.headers['Authorization'] = 'Bearer ' + t;
     const r = await fetch(url, opts);
-    // return parsed JSON if possible, otherwise throw with text
     const txt = await r.text().catch(()=>null);
     const ct = r.headers.get('content-type') || '';
-    if (!r.ok) {
-      const message = txt ? txt.substring(0,200) : r.statusText;
-      const err = new Error('HTTP ' + r.status + ': ' + message);
-      err.status = r.status;
-      err.body = txt;
-      throw err;
-    }
-    if (ct.indexOf('application/json') !== -1) {
-      return JSON.parse(txt);
-    }
-    // non-json success (rare): return raw text
+    if (!r.ok) { const err = new Error('HTTP ' + r.status + ': ' + (txt || r.statusText)); err.body = txt; throw err; }
+    if (ct.indexOf('application/json') !== -1) return JSON.parse(txt);
     return txt;
   }
 
+  const feeList = document.getElementById('feeList');
+  const feeKey = document.getElementById('feeKey');
+  const feeVal = document.getElementById('feeVal');
+  const btnSave = document.getElementById('btnSave');
+  const btnCalc = document.getElementById('btnCalc');
+  const calcResult = document.getElementById('calcResult');
+  const calcMsg = document.getElementById('calcMsg');
+
   async function loadFees() {
-    feeDisplay.textContent = 'Loading fee settings...';
+    feeList.textContent = 'Loading fee settings...';
     try {
-      // preferred: /admin/fees endpoint returns JSON { ok:true, fees: {key: value} } OR array
-      let j = null;
-      try {
-        j = await fetchJSON('/admin/fees', { method: 'GET' });
-      } catch (e) {
-        // fallback: try older /fee_settings route if present
-        try {
-          j = await fetchJSON('/fee_settings', { method: 'GET' });
-        } catch (e2) {
-          // final fallback: call payments/calc with zero inputs to fetch fee snapshot
-          j = null;
-        }
-      }
-
+      const j = await fetchJSON('/admin/fees');
       if (j && j.ok && j.fees) {
-        renderFeeObject(j.fees);
+        renderFees(j.fees);
         return;
       }
-
-      if (j && Array.isArray(j)) {
-        // array of rows
-        const map = {};
-        j.forEach(r => {
-          if (r.key_name) map[r.key_name] = r.value_decimal || r.value_text || r.value;
-          else if (r.key) map[r.key] = r.value;
-        });
-        renderFeeObject(map);
+      // fallback: payments/calc to read feeSettings snapshot
+      const calc = await fetchJSON('/payments/calc?messaging_mode=semi&expected_users=0&expected_bookings_per_day=0');
+      if (calc && calc.feeSettings) {
+        renderFees(calc.feeSettings);
         return;
       }
-
-      // fallback: fetch calc with zero to get feeSettings (payments/calc returns feeSettings)
-      try {
-        const calc = await fetchJSON('/payments/calc?messaging_mode=semi&expected_users=0&expected_bookings_per_day=0');
-        if (calc && calc.feeSettings) {
-          renderFeeObject(calc.feeSettings);
-          return;
-        }
-      } catch (e) {
-        // ignore and show error
-      }
-
-      feeDisplay.textContent = 'Unable to load fee settings from server';
-    } catch (err) {
-      feeDisplay.textContent = 'Error loading fees: ' + (err && err.message || err);
+      feeList.textContent = 'No fee settings available';
+    } catch (e) {
+      feeList.textContent = 'Error loading fees: ' + (e && e.message || e);
+      console.error('loadFees', e);
     }
   }
 
-  function renderFeeObject(map) {
-    if (!map || Object.keys(map).length === 0) {
-      feeDisplay.textContent = 'No fee settings found';
-      return;
+  function renderFees(map) {
+    if (!map || Object.keys(map).length === 0) { feeList.textContent = 'No fee settings'; return; }
+    // map may have values that are objects (if older code returned rows). Normalize:
+    const out = [];
+    for (const k of Object.keys(map)) {
+      let v = map[k];
+      if (typeof v === 'object' && v !== null) {
+        if ('value_decimal' in v) v = v.value_decimal;
+        else if ('value' in v) v = v.value;
+        else v = JSON.stringify(v);
+      }
+      out.push(`${k} = ${v}`);
     }
-    const lines = [];
-    const preferredOrder = ['annual_fee','monthly_platform_fee_per_user','message_cost_per_booking','free_trial_days'];
-    preferredOrder.forEach(k => {
-      if (k in map) lines.push(`${k} = ${map[k]}`);
-    });
-    Object.keys(map).forEach(k => { if (!preferredOrder.includes(k)) lines.push(`${k} = ${map[k]}`); });
-    feeDisplay.textContent = lines.join('\n');
+    feeList.textContent = out.join('\n');
   }
 
-  btnSaveFee.addEventListener('click', async () => {
-    clearError();
-    const k = (feeKey.value || '').trim();
-    const v = (feeValue.value || '').trim();
-    if (!k) { showError('Enter fee key'); return; }
-    if (v === '') { showError('Enter a value'); return; }
+  btnSave.addEventListener('click', async () => {
+    const k = (feeKey.value||'').trim();
+    const v = (feeVal.value||'').trim();
+    if (!k) return alert('Enter fee key');
+    if (v === '') return alert('Enter value');
     try {
-      const body = { key: k, value: v };
-      const resp = await fetchJSON('/admin/fees', { method: 'PUT', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } });
-      if (resp && resp.ok) {
-        feeKey.value = ''; feeValue.value = '';
-        notice.style.display = 'block';
-        notice.textContent = 'Saved successfully (server response OK).';
-        setTimeout(()=>notice.style.display='none', 4000);
+      const j = await fetchJSON('/admin/fees', { method: 'PUT', body: JSON.stringify({ key:k, value:v }), headers: { 'Content-Type': 'application/json' } });
+      if (j && j.ok) {
+        alert('Saved');
+        feeKey.value = ''; feeVal.value = '';
         await loadFees();
       } else {
-        showError('Save failed: ' + JSON.stringify(resp));
+        alert('Save failed: ' + JSON.stringify(j));
       }
-    } catch (err) {
-      showError('Save failed: ' + (err.body || err.message || err));
+    } catch (e) {
+      alert('Save failed: ' + (e && e.message || e));
     }
   });
 
   btnCalc.addEventListener('click', async () => {
-    clearError();
+    const mode = document.getElementById('mode').value;
+    const users = Number(document.getElementById('users').value || 0);
+    const bookings = Number(document.getElementById('bookingsDay').value || 0);
     calcResult.textContent = '...';
     calcMsg.textContent = 'Fetching server-side calculation...';
-    const mode = modeEl.value;
-    const users = Number(usersEl.value || 0);
-    const bookings = Number(bookingsDayEl.value || 0);
     try {
       const url = `/payments/calc?messaging_mode=${encodeURIComponent(mode)}&expected_users=${encodeURIComponent(users)}&expected_bookings_per_day=${encodeURIComponent(bookings)}`;
       const j = await fetchJSON(url);
-      if (!j || !j.ok) {
-        calcResult.textContent = 'Error';
-        calcMsg.textContent = 'Server returned invalid response';
-        return;
-      }
-      const rupees = Number(j.amount_rupees || 0);
-      calcResult.textContent = '₹' + rupees;
+      if (!j || !j.ok) { calcResult.textContent = 'error'; calcMsg.textContent = 'Server returned invalid response'; return; }
+      calcResult.textContent = '₹' + (j.amount_rupees || 0);
       calcMsg.textContent = 'Calculation from server (uses current fee_settings)';
-    } catch (err) {
+    } catch (e) {
       calcResult.textContent = '—';
-      calcMsg.textContent = 'Calculation failed: ' + (err && err.message ? err.message : 'unknown');
+      calcMsg.textContent = 'Calculation failed: ' + (e && e.message || e);
     }
   });
 
-  // initial load
   await loadFees();
-
 })();
 </script>
 </body>
