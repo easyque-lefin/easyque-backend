@@ -1,214 +1,229 @@
 // routes/payments.js
-// Node. Uses razorpay npm package (npm i razorpay)
+// MySQL-friendly payments router for EasyQue
+// - POST /payments/create-order
+// - POST /payments/verify
+// - webhookHandler(req,res) exported and intended to be mounted with express.raw() in index.js
+
 const express = require('express');
-const Razorpay = require('razorpay');
 const crypto = require('crypto');
+const Razorpay = require('razorpay');
 const db = require('../db');
 
 const router = express.Router();
 
-const KEY_ID = process.env.RAZORPAY_KEY_ID;
-const KEY_SECRET = process.env.RAZORPAY_KEY_SECRET;
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || ''; // must match Razorpay dashboard
+const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || '';
+const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '';
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
 
-if (!KEY_ID || !KEY_SECRET) {
-  console.warn('Razorpay keys not set in env (RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET). Payments will fail until configured.');
-}
-
-const razor = new Razorpay({
-  key_id: KEY_ID,
-  key_secret: KEY_SECRET
+const razorpay = new Razorpay({
+  key_id: RAZORPAY_KEY_ID,
+  key_secret: RAZORPAY_KEY_SECRET,
 });
 
-/**
- * Helper: convert rupees (decimal or integer or string) -> paise (integer)
- */
-function rupeesToPaise(amountRupees) {
-  if (amountRupees == null) return null;
-  // parse as number, round to 2 decimals then *100
-  const n = Number(amountRupees);
-  if (!isFinite(n)) return null;
-  const paise = Math.round(n * 100);
-  return paise;
+async function loadFeeSettings() {
+  const rows = await db.query('SELECT key_name, value_decimal FROM fee_settings');
+  const map = {};
+  if (Array.isArray(rows)) {
+    rows.forEach(r => {
+      map[r.key_name] = parseFloat(r.value_decimal || 0);
+    });
+  }
+  return map;
 }
 
-/**
- * POST /payments/create-order
- * Body expectation:
- *  {
- *    email, name,
- *    org: { name, location } (optional),
- *    messaging_mode: 'full'|'semi',
- *    chosen_users_count: number,
- *    expected_bookings_per_day: number
- *  }
- *
- * Server will compute price using fee_settings table (or fallback constants).
- */
+function calculateAmountRupees(payload = {}, feeSettings = {}) {
+  const messaging_mode = payload.messaging_mode || 'semi';
+  const expected_users = Number(payload.expected_users || 0);
+  const expected_bookings_per_day = Number(payload.expected_bookings_per_day || 0);
+
+  const annual_fee = Number(feeSettings['annual_fee'] || 0);
+  const monthly_platform_fee_per_user = Number(feeSettings['monthly_platform_fee_per_user'] || 0);
+  const message_cost_per_booking = Number(feeSettings['message_cost_per_booking'] || 0);
+
+  if (messaging_mode === 'semi') {
+    const initial = annual_fee + (expected_users * monthly_platform_fee_per_user);
+    return Math.max(0, initial);
+  } else {
+    const monthly_platform_total = expected_users * monthly_platform_fee_per_user;
+    const estimated_message_cost_30 = expected_bookings_per_day * message_cost_per_booking * 30;
+    const initial = monthly_platform_total + estimated_message_cost_30;
+    return Math.max(0, initial);
+  }
+}
+
 router.post('/create-order', async (req, res) => {
   try {
-    const body = req.body || {};
-    const {
-      email,
-      name,
-      org,
-      messaging_mode,
-      chosen_users_count = 0,
-      expected_bookings_per_day = 0
-    } = body;
+    const payload = req.body || {};
+    const messaging_mode = payload.messaging_mode || 'semi';
+    const expected_users = Number(payload.expected_users || 0);
+    const expected_bookings_per_day = Number(payload.expected_bookings_per_day || 0);
+    const email = payload.email || null;
+    const name = payload.name || null;
+    const org_id = payload.org_id || null;
+    const user_id = payload.user_id || null;
 
-    // simple validation
-    if (!email) return res.status(400).json({ ok:false, error: 'email required' });
+    const feeSettings = await loadFeeSettings();
+    const amount_rupees = calculateAmountRupees({ messaging_mode, expected_users, expected_bookings_per_day }, feeSettings);
 
-    // load fee settings (if your system has a fee_settings table)
-    const feeRows = await db.query('SELECT key_name, value_decimal FROM fee_settings');
-    const fees = {};
-    (feeRows || []).forEach(r => fees[r.key_name] = Number(r.value_decimal || 0));
-
-    // fallback default values if fee_settings missing
-    const monthlyPlatformPerUser = fees.monthly_platform_fee_per_user || 100; // rupees
-    const messageCostPerBooking = fees.message_cost_per_booking || 0.1; // rupees
-    const annualFee = fees.annual_fee || 500; // rupees
-    // If you have any other pricing rules, adapt here.
-
-    // price calculation (same logic you used in signup.start-paid)
-    const platform = (monthlyPlatformPerUser) * Number(chosen_users_count || 0);
-    const messageCost = (messaging_mode === 'full')
-      ? (Number(expected_bookings_per_day || 0) * messageCostPerBooking * 30)
-      : 0;
-    const totalRupees = Number(annualFee || 0) + Number(platform || 0) + Number(messageCost || 0);
-
-    const amountPaise = rupeesToPaise(totalRupees);
-
-    if (!amountPaise || amountPaise <= 0) {
-      return res.status(400).json({ ok:false, error: 'invalid_amount', message: 'Create order failed: amount (rupees) is required and must be > 0' });
+    if (!amount_rupees || Number(amount_rupees) <= 0) {
+      return res.status(400).json({ ok: false, error: 'Calculated amount must be > 0' });
     }
 
-    // Create a DB billing record (status pending) — so you can reconcile later
-    const details = {
-      email, name, org, messaging_mode, chosen_users_count, expected_bookings_per_day,
-      computed: { annualFee, platform, messageCost, totalRupees }
+    const amount_paise = Math.round(Number(amount_rupees) * 100);
+
+    const detailsObj = {
+      messaging_mode,
+      expected_users,
+      expected_bookings_per_day,
+      feeSettingsSnapshot: feeSettings,
+      flow: payload.flow || 'signup'
     };
 
-    const billingInsert = await db.query(
-      'INSERT INTO billing_records (org_id, user_id, amount, details, status, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
-      [null, null, totalRupees, JSON.stringify(details), 'pending']
-    );
-    // get billing id (mysql insertId)
-    const billingInsertObj = Array.isArray(billingInsert) ? billingInsert[0] : billingInsert;
-    const billingId = billingInsertObj.insertId || billingInsertObj.insert_id || null;
+    const insertSql = `INSERT INTO billing_records
+      (org_id, user_id, amount, currency, details, status, created_at, updated_at)
+      VALUES (?, ?, ?, 'INR', ?, 'pending', NOW(), NOW())`;
+    const insertParams = [org_id, user_id, amount_rupees, JSON.stringify(detailsObj)];
 
-    // create Razorpay order
-    const orderPayload = {
-      amount: amountPaise,       // paise (integer)
+    const insertRes = await db.query(insertSql, insertParams);
+    const insertId = insertRes && (insertRes.insertId || (Array.isArray(insertRes) && insertRes[0] && insertRes[0].insertId)) ? (insertRes.insertId || insertRes[0].insertId) : (insertRes && insertRes.insertId ? insertRes.insertId : null);
+
+    const orderOptions = {
+      amount: amount_paise,
       currency: 'INR',
-      receipt: 'bill_' + (billingId || Math.floor(Math.random()*1e6)),
+      receipt: `easyque_rcpt_${Date.now()}`,
       notes: {
-        billing_id: billingId ? String(billingId) : '',
+        billing_record_id: insertId || null,
         email: email || '',
         name: name || ''
       }
     };
 
-    const order = await razor.orders.create(orderPayload);
+    const order = await razorpay.orders.create(orderOptions);
 
-    // update billing record with razorpay order id
-    if (billingId) {
-      await db.query('UPDATE billing_records SET external_order_id = ?, updated_at = NOW() WHERE id = ?', [order.id, billingId]);
+    try {
+      await db.query('UPDATE billing_records SET external_order_id = ?, receipt = ?, updated_at = NOW() WHERE id = ?', [order.id, orderOptions.receipt, insertId]);
+    } catch (uerr) {
+      console.warn('Failed to update billing_records with external_order_id:', uerr && uerr.message);
     }
 
     return res.json({
       ok: true,
-      order: {
-        id: order.id,
-        amount: order.amount,
-        currency: order.currency,
-        receipt: order.receipt
-      },
-      razor_key_id: KEY_ID
+      order,
+      razor_key_id: RAZORPAY_KEY_ID,
+      billing_id: insertId,
+      amount_rupees
     });
   } catch (err) {
-    console.error('POST /payments/create-order error', err && err.message ? err.message : err);
-    return res.status(500).json({ ok:false, error: err.message || String(err) });
+    console.error('POST /payments/create-order error', err && err.stack ? err.stack : err);
+    return res.status(500).json({ ok: false, error: 'server error', details: err && err.message });
   }
 });
 
-/**
- * Simple GET to check keys (debug)
- */
-router.get('/test-keys', (req, res) => {
-  res.json({ ok:true, key_id: process.env.RAZORPAY_KEY_ID ? true : false });
+router.post('/verify', async (req, res) => {
+  try {
+    const { razorpay_payment_id, razorpay_order_id, razorpay_signature, billing_id } = req.body || {};
+    if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
+      return res.status(400).json({ ok: false, error: 'Missing payment verification fields' });
+    }
+
+    const h = crypto.createHmac('sha256', RAZORPAY_KEY_SECRET);
+    h.update(razorpay_order_id + '|' + razorpay_payment_id);
+    const expectedSignature = h.digest('hex');
+
+    if (expectedSignature !== razorpay_signature) {
+      console.warn('Payment verify signature mismatch', { expectedSignature, razorpay_signature });
+      return res.status(400).json({ ok: false, error: 'Invalid signature' });
+    }
+
+    let updateSql;
+    let updateParams = [];
+    if (billing_id) {
+      updateSql = 'UPDATE billing_records SET status = ?, external_payment_id = ?, updated_at = NOW() WHERE id = ?';
+      updateParams = ['paid', razorpay_payment_id, billing_id];
+    } else {
+      updateSql = 'UPDATE billing_records SET status = ?, external_payment_id = ?, updated_at = NOW() WHERE external_order_id = ?';
+      updateParams = ['paid', razorpay_payment_id, razorpay_order_id];
+    }
+
+    await db.query(updateSql, updateParams);
+
+    try {
+      await db.query('UPDATE signup_trials SET payment_status = ? WHERE external_billing_id = ? OR external_billing_id = ?', ['paid', razorpay_order_id, razorpay_order_id]);
+    } catch (e) {
+      console.debug('signup_trials update skipped or failed:', e && e.message);
+    }
+
+    return res.json({ ok: true, message: 'Payment verified and billing recorded' });
+  } catch (err) {
+    console.error('POST /payments/verify error', err && err.stack ? err.stack : err);
+    return res.status(500).json({ ok: false, error: 'server error', details: err && err.message });
+  }
 });
 
-/**
- * Webhook handler (raw body verification should be done by index.js before parse)
- * We export handler so index.js can call it when route receives raw body.
- *
- * The handler expects:
- *  - req.body is a Buffer (raw) or a string
- *  - header 'x-razorpay-signature' contains signature
- */
 async function webhookHandler(req, res) {
   try {
-    const signature = req.headers['x-razorpay-signature'] || req.headers['X-Razorpay-Signature'];
-    const rawBody = req.body; // should be Buffer because index.js used express.raw
-    if (!signature || !rawBody) {
-      console.warn('Webhook missing signature or body');
-      return res.status(400).send('invalid webhook');
+    const signature = req.headers['x-razorpay-signature'] || req.headers['x_razorpay_signature'] || '';
+    if (!WEBHOOK_SECRET) {
+      console.warn('WEBHOOK_SECRET not set; rejecting webhook for safety');
+      return res.status(500).send('webhook secret not configured');
     }
 
-    // compute expected signature
-    const hmac = crypto.createHmac('sha256', WEBHOOK_SECRET);
-    hmac.update(rawBody);
-    const expected = hmac.digest('hex');
+    const body = req.body instanceof Buffer ? req.body.toString('utf8') : (typeof req.body === 'string' ? req.body : JSON.stringify(req.body));
+    const expected = crypto.createHmac('sha256', WEBHOOK_SECRET).update(body).digest('hex');
 
-    if (expected !== signature) {
-      console.warn('Webhook signature mismatch', { expected, got: signature });
-      return res.status(400).send('signature mismatch');
+    if (!signature || expected !== signature) {
+      console.warn('Webhook signature mismatch', { expected, signature });
+      return res.status(400).send('invalid signature');
     }
 
-    // parse JSON after verification
-    const payload = JSON.parse(rawBody.toString('utf8'));
-    // Example: payload.event = 'payment.captured'
-    const ev = payload.event || (payload && payload.payload && payload.payload.payment && payload.payload.payment.entity && payload.payload.payment.entity.status) || '';
-    console.log('Razorpay webhook received:', ev);
+    let event;
+    try {
+      event = JSON.parse(body);
+    } catch (e) {
+      event = req.body;
+    }
 
-    // react to common events
-    if (payload.event === 'payment.captured' || payload.event === 'payment.authorized') {
-      const payment = (payload.payload && payload.payload.payment && payload.payload.payment.entity) || null;
-      if (payment) {
-        const orderId = payment.order_id || null;
-        const amount = payment.amount; // paise
-        const paymentId = payment.id;
-        const status = payment.status;
+    const eventType = (event.event || '').toLowerCase();
 
-        // update billing_records by external_order_id
-        if (orderId) {
-          // set record as paid / store payment info
-          await db.query('UPDATE billing_records SET status=?, external_payment_id=?, executed_at=NOW(), updated_at=NOW() WHERE external_order_id = ?', ['paid', paymentId, orderId]);
+    if (eventType === 'payment.captured' || eventType === 'payment.authorized' || eventType === 'payment.failed') {
+      const payloadPayment = (event.payload && event.payload.payment && event.payload.payment.entity) || null;
+      if (!payloadPayment) {
+        console.warn('Webhook payment event missing payload', event);
+        return res.status(200).send('no payment entity');
+      }
+
+      const orderId = payloadPayment.order_id || null;
+      const paymentId = payloadPayment.id || null;
+      const status = (payloadPayment.status || '').toLowerCase();
+
+      if (orderId) {
+        let newStatus = 'pending';
+        if (status === 'captured') newStatus = 'paid';
+        if (status === 'failed' || status === 'cancelled') newStatus = 'failed';
+        if (status === 'authorized') newStatus = 'authorized';
+
+        try {
+          await db.query('UPDATE billing_records SET status = ?, external_payment_id = ?, updated_at = NOW() WHERE external_order_id = ?', [newStatus, paymentId, orderId]);
+        } catch (uerr) {
+          console.error('Webhook: failed updating billing_records', uerr && uerr.message);
         }
 
-        // If there's a signup trial associated, mark it paid
-        // (You may need to adapt SQL depending on your schema)
-        if (orderId) {
-          await db.query("UPDATE signup_trials SET payment_status='paid', updated_at=NOW() WHERE external_order_id = ?", [orderId]);
-        }
+        try {
+          await db.query('UPDATE signup_trials SET payment_status = ? WHERE external_billing_id = ? OR external_billing_id = ?', [newStatus === 'paid' ? 'paid' : newStatus, orderId, orderId]);
+        } catch (e) { /* ignore */ }
+      } else {
+        console.warn('Webhook: payment without order_id', paymentId);
       }
+    } else {
+      console.log('Unhandled webhook event:', eventType);
     }
 
-    if (payload.event === 'payment.failed') {
-      const payment = (payload.payload && payload.payload.payment && payload.payload.payment.entity) || null;
-      if (payment && payment.order_id) {
-        await db.query('UPDATE billing_records SET status=?, updated_at=NOW() WHERE external_order_id = ?', ['failed', payment.order_id]);
-      }
-    }
-
-    // respond 200 quickly
-    res.json({ ok:true });
+    return res.json({ ok: true });
   } catch (err) {
-    console.error('webhookHandler error', err);
-    res.status(500).send('server error');
+    console.error('webhookHandler error', err && err.stack ? err.stack : err);
+    return res.status(500).send('server error');
   }
 }
 
 module.exports = { router, webhookHandler };
+
