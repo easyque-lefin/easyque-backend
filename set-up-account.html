@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Set up your account</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    body{font-family:Arial,sans-serif;padding:20px;background:#f4f7fb}
+    .card{max-width:520px;margin:40px auto;background:#fff;padding:18px;border-radius:10px;border:1px solid #eee}
+    label{display:block;margin-top:10px;font-weight:600}
+    input{width:100%;padding:10px;margin-top:6px;border-radius:6px;border:1px solid #ddd}
+    button{margin-top:12px;padding:10px;border-radius:8px;border:0;background:#1765d6;color:#fff;cursor:pointer;width:100%}
+    .muted{color:#666;margin-top:8px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Set up your account</h2>
+    <p class="muted">Enter email & password to continue</p>
+
+    <label>Name</label>
+    <input id="name" placeholder="Full name">
+
+    <label>Email</label>
+    <input id="email" type="email">
+
+    <label>Password</label>
+    <input id="password" type="password">
+    <button id="btnCreate">Create Account</button>
+
+    <div id="msg" class="muted"></div>
+  </div>
+
+<script>
+const base = window.location.origin;
+const params = new URLSearchParams(location.search);
+const trialId = params.get('trial_id') || '';
+document.getElementById('btnCreate').addEventListener('click', async () => {
+  const name = document.getElementById('name').value.trim();
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  if (!email || !password) { alert('Email and password required'); return; }
+  try {
+    const r = await fetch(base + '/signup/complete', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ trial_id: trialId, name, email, password })
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) { alert('Create account failed: ' + (j.error || JSON.stringify(j))); return; }
+    alert('Account created. Please login.');
+    window.location = '/index.html';
+  } catch (err) {
+    alert('Network error: ' + err.message);
+  }
+});
+</script>
+</body>
+</html>
