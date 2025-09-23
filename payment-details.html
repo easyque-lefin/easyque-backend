@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Payment</title></head>
+<body style="font-family:Arial;margin:24px">
+  <h2>Payment (Simulated)</h2>
+  <div id="info">Processing...</div>
+  <div style="margin-top:12px">
+    <button id="btnSimSuccess">Simulate Success</button>
+    <button id="btnSimFail" style="margin-left:8px">Simulate Failure</button>
+  </div>
+
+<script>
+const params = new URLSearchParams(location.search);
+const extId = params.get('external_billing_id') || 'test-'+Math.random().toString(36).slice(2,9);
+document.getElementById('info').innerText = 'External billing id: ' + extId;
+
+// Simulate payment success: call backend endpoint that you created to confirm callback/webhook (POST /payments/confirm)
+document.getElementById('btnSimSuccess').addEventListener('click', async ()=>{
+  try {
+    const r = await fetch('/payments/confirm', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ external_billing_id: extId, status: 'paid', paid_at: new Date().toISOString() })
+    });
+    const j = await r.json();
+    if (!r.ok) return alert('Confirm failed: ' + JSON.stringify(j));
+    alert('Payment confirmed on backend. You will be redirected to account setup.');
+    // redirect to set up account for the user
+    window.location = '/set-up-account.html?flow=paid&external_billing_id=' + encodeURIComponent(extId);
+  } catch (err) { alert('Network error: ' + err.message); }
+});
+
+// Simulate failure
+document.getElementById('btnSimFail').addEventListener('click', async ()=>{
+  await fetch('/payments/confirm', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ external_billing_id: extId, status: 'failed', paid_at: null })
+  });
+  alert('Payment marked failed. Please retry or contact support.');
+});
+</script>
+</body>
+</html>
