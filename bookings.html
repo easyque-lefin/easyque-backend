@@ -5,25 +5,37 @@
   <title>EasyQue — Bookings</title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <style>
-    body{font-family:Arial,Helvetica,sans-serif;background:#f4f7fb;padding:20px}
-    .container{max-width:1100px;margin:0 auto;display:flex;gap:20px}
-    .left,.right{background:#fff;padding:18px;border-radius:8px;border:1px solid #eee}
-    .left{width:360px}
-    .right{flex:1}
+    body{font-family:Arial,Helvetica,sans-serif;background:#f4f7fb;margin:0;padding:20px}
+    header{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+    header a{color:#0b74de;text-decoration:none;font-weight:600}
+    .container{max-width:1200px;margin:0 auto;display:flex;gap:20px}
+    .left{width:380px;background:#fff;padding:18px;border-radius:8px;border:1px solid #eee}
+    .right{flex:1;background:#fff;padding:18px;border-radius:8px;border:1px solid #eee}
     label{display:block;font-weight:700;margin-top:10px}
     input,select{width:100%;padding:10px;border-radius:6px;border:1px solid #e5e9f2;margin-top:6px}
-    button{background:#1b6eff;color:#fff;padding:8px 12px;border:0;border-radius:6px;margin-top:12px;cursor:pointer}
+    button{background:#1b6eff;color:#fff;padding:10px 14px;border:0;border-radius:6px;margin-top:12px;cursor:pointer}
     table{width:100%;border-collapse:collapse;margin-top:12px}
     th,td{padding:8px;border-bottom:1px solid #f0f2f8;text-align:left}
     .muted{color:#6b7280;font-size:13px}
     .error{color:#b00020;margin-top:8px}
+    .small{font-size:13px;color:#666}
   </style>
 </head>
 <body>
+  <header>
+    <a href="index.html">Login</a> ·
+    <a href="signup-now.html">Sign Up</a> ·
+    <a href="start-trial.html">Start 7-day trial</a> ·
+    <a href="org.html">Organization / Fees</a> ·
+    <a href="admin-fees.html">Admin Fees</a>
+  </header>
+
   <h1>EasyQue — Bookings</h1>
+
   <div class="container">
     <div class="left">
       <h3>Create booking</h3>
+
       <label>Organization</label>
       <select id="orgSelect"><option>Loading organizations...</option></select>
 
@@ -34,20 +46,40 @@
       <select id="userSelect"><option>-- choose assigned user --</option></select>
 
       <label>Customer name</label>
-      <input id="custName">
+      <input id="custName" placeholder="Customer name">
 
       <label>Customer phone</label>
-      <input id="custPhone">
+      <input id="custPhone" placeholder="Mobile/WhatsApp number">
 
       <button id="btnCreate">Create booking (demo)</button>
-      <div id="leftMsg" class="muted">Use this form to create a booking for the selected org.</div>
+      <div id="leftMsg" class="small">Use this form to create a booking for the selected org.</div>
       <div id="leftError" class="error" style="display:none"></div>
+
+      <hr>
+
+      <h4>Add Assigned / Receptionist</h4>
+      <div class="small">Select organization then add a user for that org</div>
+      <label>Name</label><input id="addUserName" placeholder="Name">
+      <label>Email</label><input id="addUserEmail" placeholder="Email">
+      <label>Role</label>
+      <select id="addUserRole"><option value="reception">Assigned user</option><option value="admin">Admin</option></select>
+      <button id="btnAddUser">Add user</button>
+      <div id="addUserMsg" class="small"></div>
+
+      <hr>
+
+      <h4>Search existing organization (admin)</h4>
+      <label>Search by id or name</label>
+      <input id="searchOrgText" placeholder="id or name">
+      <button id="btnSearchOrg">Search</button>
+      <div id="searchOrgResults" style="margin-top:8px"></div>
     </div>
 
     <div class="right">
       <h3>Bookings</h3>
+
       <div style="display:flex;gap:12px;align-items:center">
-        <input id="filterDate" type="date" style="max-width:200px">
+        <input id="filterDate" type="date" style="max-width:240px">
         <button id="btnReload">Reload</button>
         <div style="margin-left:auto" class="muted">Select organization to show bookings</div>
       </div>
@@ -72,10 +104,7 @@
     const r = await fetch(url, opts);
     const txt = await r.text().catch(()=>null);
     const ct = r.headers.get('content-type') || '';
-    if (!r.ok) {
-      const e = new Error('HTTP ' + r.status + ': ' + (txt || r.statusText));
-      e.body = txt; throw e;
-    }
+    if (!r.ok) { const e = new Error('HTTP ' + r.status + ': ' + (txt || r.statusText)); e.body = txt; throw e; }
     if (ct.indexOf('application/json') !== -1) return JSON.parse(txt);
     return txt;
   }
@@ -140,9 +169,7 @@
     bookingsTable.style.display = 'none';
     rightError.style.display = 'none';
     try {
-      // try common endpoint shapes
-      let r = await fetch(`/bookings?org_id=${encodeURIComponent(orgId)}`);
-      if (r.status === 404) r = await fetch(`/bookings?org=${encodeURIComponent(orgId)}`);
+      const r = await fetch('/bookings?org_id=' + encodeURIComponent(orgId));
       if (!r.ok) {
         const txt = await r.text().catch(()=>null);
         throw new Error('Failed to fetch bookings: ' + (txt || r.statusText));
@@ -158,16 +185,11 @@
       let arr = [];
       if (Array.isArray(j)) arr = j;
       else if (j.ok && Array.isArray(j.bookings)) arr = j.bookings;
-      else if (Array.isArray(j.bookings)) arr = j.bookings;
-      else if (Array.isArray(j.data)) arr = j.data;
-      else {
-        bookingsMsg.textContent = 'No bookings returned by server';
-        return;
-      }
+      else arr = j.bookings || [];
       populateBookings(arr);
     } catch (e) {
       bookingsMsg.textContent = 'Unable to load bookings: ' + (e && e.message || e);
-      console.error('loadBookingsForOrg', e);
+      console.error('loadBookingsForOrg Error:', e);
     }
   }
 
@@ -182,13 +204,13 @@
     bookingsMsg.textContent = '';
     arr.forEach(b => {
       const tr = document.createElement('tr');
-      const id = b.id || b.booking_id || '';
+      const id = b.id || '';
       const token = b.token || '';
-      const name = b.name || b.customer_name || '';
-      const phone = b.phone || b.customer_phone || '';
+      const name = b.customer_name || b.name || '';
+      const phone = b.customer_phone || b.phone || '';
       const assigned = b.assigned_name || b.assigned_user || '';
-      const date = b.date || b.booking_date || '';
-      const status = b.status || b.state || '';
+      const date = b.booking_date || b.date || '';
+      const status = b.status || '';
       tr.innerHTML = `<td>${id}</td><td>${token}</td><td>${escapeHtml(name)}</td><td>${escapeHtml(phone)}</td><td>${escapeHtml(assigned)}</td><td>${escapeHtml(date)}</td><td>${escapeHtml(status)}</td>`;
       bookingsBody.appendChild(tr);
     });
@@ -210,15 +232,55 @@
     if (!name || !phone) { leftError.style.display='block'; leftError.textContent='Name & phone required'; return; }
     try {
       const body = { org_id: orgId, department_id: deptId, assigned_user_id: userId, name, phone, booking_date: new Date().toISOString().slice(0,10) };
-      const resp = await fetch('/bookings', { method: 'POST', headers: { 'Content-Type':'application/json', ...(token()? { 'Authorization':'Bearer '+token() } : {}) }, body: JSON.stringify(body) });
+      const resp = await fetch('/bookings', { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(body) });
       if (!resp.ok) {
         const t = await resp.text().catch(()=>null);
         throw new Error('Server error: ' + (t || resp.statusText));
       }
-      leftMsg.textContent = 'Booking created. Reloading...';
+      document.getElementById('leftMsg').textContent = 'Booking created. Reloading...';
       await loadBookingsForOrg(orgId);
     } catch (e) {
       leftError.style.display='block'; leftError.textContent = 'Create booking failed: ' + (e && e.message || e);
+    }
+  });
+
+  // Add assigned user (simple)
+  document.getElementById('btnAddUser').addEventListener('click', async () => {
+    document.getElementById('addUserMsg').textContent = '';
+    const orgId = orgSelect.value;
+    const name = (document.getElementById('addUserName').value||'').trim();
+    const email = (document.getElementById('addUserEmail').value||'').trim();
+    const role = document.getElementById('addUserRole').value;
+    if (!orgId) return alert('Select org first');
+    if (!name || !email) return alert('Name & email required');
+    try {
+      const resp = await fetch('/signup/add-user', { method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify({ org_id:orgId, name, email, role })});
+      if (!resp.ok) { const t = await resp.text(); throw new Error(t || 'error'); }
+      document.getElementById('addUserMsg').textContent = 'User added';
+      // reload users for org
+      await loadOrgDetails(orgId);
+    } catch (e) {
+      document.getElementById('addUserMsg').textContent = 'Add user failed: ' + (e && e.message || e);
+    }
+  });
+
+  document.getElementById('btnSearchOrg').addEventListener('click', async () => {
+    const q = (document.getElementById('searchOrgText').value || '').trim();
+    if (!q) return alert('Enter id or name');
+    try {
+      const r = await fetch('/organizations?q=' + encodeURIComponent(q));
+      if (!r.ok) { const t = await r.text(); throw new Error(t || r.statusText); }
+      const data = await r.json();
+      const el = document.getElementById('searchOrgResults');
+      el.innerHTML = '';
+      if (!data || !data.organizations || data.organizations.length===0) { el.textContent = 'No org found'; return; }
+      data.organizations.forEach(o => {
+        const d = document.createElement('div');
+        d.textContent = o.name + ' ('+o.id+')';
+        el.appendChild(d);
+      });
+    } catch (e) {
+      alert('Search failed: ' + (e && e.message || e));
     }
   });
 
