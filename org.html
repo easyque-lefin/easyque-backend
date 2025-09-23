@@ -1,3 +1,4 @@
+
 <!doctype html>
 <html>
 <head>
@@ -16,66 +17,104 @@
 </head>
 <body>
 
-<!-- Admin fees button (add below your Save Organization button) -->
-<div style="margin-top:18px;">
-  <button id="btnEditFees" style="background:#1f8bff;color:#fff;padding:8px 12px;border-radius:6px;border:0;cursor:pointer;">Add / Edit Fee structure</button>
-  <div id="feesMsg" style="margin-top:8px;color:#666;"></div>
-</div>
+<!-- Fee settings editor (admin only) -->
+<div style="margin-top:20px;border:1px solid #eee;padding:12px;border-radius:8px;max-width:760px;">
+  <h3>Fee settings</h3>
+  <div id="feeList" style="margin-bottom:8px;"></div>
+  <div style="display:flex;gap:8px;align-items:center;">
+    <input id="fee_key" placeholder="fee key (e.g. monthly_platform_fee_per_user)" style="flex:1;padding:8px;">
+    <input id="fee_value" placeholder="value (number or text)" style="width:160px;padding:8px;">
+    <button id="btnSaveFee" style="padding:8px 12px;">Save</button>
+  </div>
 
-<!-- Modal (hidden) -->
-<div id="feesModal" style="display:none;position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
-  <div style="background:#fff;padding:18px;border-radius:8px;width:420px;margin:auto">
-    <h3>Fee settings</h3>
-    <label>Annual fee (INR)</label><input id="fee_annual" type="number" min="0" step="0.01" style="width:100%;padding:8px;margin-top:6px;">
-    <label>Monthly platform fee per user (INR)</label><input id="fee_monthly_user" type="number" min="0" step="0.01" style="width:100%;padding:8px;margin-top:6px;">
-    <label>Message cost per booking (INR)</label><input id="fee_message_cost" type="number" min="0" step="0.01" style="width:100%;padding:8px;margin-top:6px;">
-    <label>Free trial days</label><input id="fee_trial_days" type="number" min="0" step="1" style="width:100%;padding:8px;margin-top:6px;">
-    <div style="margin-top:12px;text-align:right;">
-      <button id="feesCancel" style="margin-right:8px;">Cancel</button>
-      <button id="feesSave" style="background:#0b8b59;color:#fff;padding:6px 10px;border-radius:6px;border:0;">Save</button>
-    </div>
+  <h4 style="margin-top:12px;">View charges (sample)</h4>
+  <label>Mode:
+    <select id="preview_mode">
+      <option value="semi">Semi (no provider)</option>
+      <option value="full">Full (we send messages)</option>
+    </select>
+  </label>
+  <label>Users: <input id="preview_users" type="number" value="10"></label>
+  <label>Bookings/day (full mode only): <input id="preview_bookings" type="number" value="500"></label>
+  <div style="margin-top:8px;">
+    <button id="btnPreview" style="padding:8px 12px;">Calculate charge</button>
+    <div id="preview_result" style="margin-top:8px;font-weight:bold;"></div>
   </div>
 </div>
+
 <script>
-  async function loadFeesToModal() {
+(async function(){
+  const base = window.location.origin;
+  const token = localStorage.getItem('accessToken');
+
+  async function loadFees() {
     try {
-      const r = await fetch('/signup/options'); // earlier route returns fees
+      const r = await fetch(base + '/admin/fees', { headers: { Authorization: 'Bearer ' + token }});
       const j = await r.json();
-      const fees = j.fees || {};
-      document.getElementById('fee_annual').value = fees.annual_fee || '';
-      document.getElementById('fee_monthly_user').value = fees.monthly_platform_fee_per_user || '';
-      document.getElementById('fee_message_cost').value = fees.message_cost_per_booking || '';
-      document.getElementById('fee_trial_days').value = j.free_trial_days || '';
+      const list = document.getElementById('feeList');
+      list.innerHTML = '';
+      if (j.ok && j.fees) {
+        for (const k of Object.keys(j.fees)) {
+          const v = j.fees[k].value_decimal !== null ? j.fees[k].value_decimal : j.fees[k].value_text;
+          const row = document.createElement('div');
+          row.textContent = k + ' = ' + v;
+          list.appendChild(row);
+        }
+      } else {
+        list.textContent = 'No fees loaded or permission denied';
+      }
     } catch (e) {
-      console.error('load fees error', e);
+      console.error('loadFees', e);
     }
   }
-  document.getElementById('btnEditFees').addEventListener('click', async () => {
-    await loadFeesToModal();
-    document.getElementById('feesModal').style.display = 'flex';
-  });
-  document.getElementById('feesCancel').addEventListener('click', () => document.getElementById('feesModal').style.display = 'none');
-  document.getElementById('feesSave').addEventListener('click', async () => {
-    const payload = {
-      key: 'annual_fee', value: Number(document.getElementById('fee_annual').value || 0)
-    };
+
+  document.getElementById('btnSaveFee').addEventListener('click', async () => {
+    const key = document.getElementById('fee_key').value.trim();
+    const value = document.getElementById('fee_value').value.trim();
+    if (!key) { alert('Enter key'); return; }
     try {
-      // update keys one by one (admin route expects key,value)
-      const updates = [
-        { key: 'annual_fee', value: Number(document.getElementById('fee_annual').value || 0) },
-        { key: 'monthly_platform_fee_per_user', value: Number(document.getElementById('fee_monthly_user').value || 0) },
-        { key: 'message_cost_per_booking', value: Number(document.getElementById('fee_message_cost').value || 0) },
-        { key: 'free_trial_days', value: Number(document.getElementById('fee_trial_days').value || 7) }
-      ];
-      for (const u of updates) {
-        await fetch('/admin/fees', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('accessToken') }, body: JSON.stringify({ key: u.key, value: u.value }) });
+      const r = await fetch(base + '/admin/fees', {
+        method: 'PUT',
+        headers: { 'Content-Type':'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify({ key, value })
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) alert('Save failed: ' + (j && j.error));
+      else {
+        alert('Saved');
+        loadFees();
       }
-      document.getElementById('feesMsg').textContent = 'Fees updated';
-      document.getElementById('feesModal').style.display = 'none';
-    } catch (err) {
-      alert('Failed to save fees: ' + err.message);
+    } catch (e) {
+      alert('Save error: ' + e.message);
     }
   });
+
+  document.getElementById('btnPreview').addEventListener('click', async () => {
+    try {
+      const mode = document.getElementById('preview_mode').value;
+      const users = Number(document.getElementById('preview_users').value || 0);
+      const bookings = Number(document.getElementById('preview_bookings').value || 0);
+      const r = await fetch(base + '/admin/fees', { headers: { Authorization: 'Bearer ' + token }});
+      const j = await r.json();
+      if (!r.ok || !j.ok) { alert('Cannot load fees'); return; }
+      const fees = {};
+      for (const k of Object.keys(j.fees)) {
+        fees[k] = j.fees[k].value_decimal !== null ? Number(j.fees[k].value_decimal) : null;
+      }
+      let amount = 0;
+      if (mode === 'semi') {
+        amount = (fees['annual_fee'] || 0) + users * (fees['monthly_platform_fee_per_user'] || 0);
+      } else {
+        const monthly_platform_total = users * (fees['monthly_platform_fee_per_user'] || 0);
+        const estimated_message_cost_30 = bookings * (fees['message_cost_per_booking'] || 0) * 30;
+        amount = monthly_platform_total + estimated_message_cost_30;
+      }
+      document.getElementById('preview_result').textContent = 'Estimated initial amount: ₹' + amount;
+    } catch (e) { console.error('preview error', e); alert('Error calculating preview'); }
+  });
+
+  loadFees();
+})();
 </script>
 
   <h1>Organization setup</h1>
@@ -175,3 +214,4 @@ btnSkip.onclick=async()=>{
 </script>
 </body>
 </html>
+
