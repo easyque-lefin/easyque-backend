@@ -1,0 +1,132 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Admin — Fee Settings</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;padding:24px;background:#f4f7fb}
+    .card{max-width:760px;margin:24px auto;background:#fff;padding:20px;border-radius:10px;border:1px solid #eee}
+    label{display:block;margin-top:12px;font-weight:600}
+    input,select{width:100%;padding:10px;margin-top:6px;border-radius:6px;border:1px solid #ddd;box-sizing:border-box}
+    .btn{background:#0b8b59;color:#fff;padding:12px;border-radius:8px;border:0;margin-top:14px;cursor:pointer;width:100%}
+    .muted{color:#666;margin-top:8px}
+    .row{display:flex;gap:12px}
+    .col{flex:1}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Fee settings (admin)</h2>
+    <div class="muted">Only admins can save. You must be logged in (token in localStorage).</div>
+
+    <label>Annual fee (INR)</label>
+    <input id="annual_fee" type="number" step="0.01">
+
+    <label>Monthly platform fee per user (INR)</label>
+    <input id="monthly_platform_fee_per_user" type="number" step="0.01">
+
+    <label>Message cost per booking (INR)</label>
+    <input id="message_cost_per_booking" type="number" step="0.0001">
+
+    <label>Free trial days</label>
+    <input id="free_trial_days" type="number" step="1" min="0">
+
+    <button id="btnSave" class="btn">Save fees</button>
+    <div id="saveMsg" class="muted"></div>
+
+    <hr>
+
+    <h3>View charges (quick estimate)</h3>
+    <div class="row">
+      <div class="col">
+        <label>Chosen users (org)</label>
+        <input id="estimate_users" type="number" value="10">
+      </div>
+      <div class="col">
+        <label>Expected bookings per day</label>
+        <input id="estimate_bookings" type="number" value="100">
+      </div>
+    </div>
+
+    <label>Messaging mode</label>
+    <select id="estimate_mode">
+      <option value="semi">Semi (you send messages)</option>
+      <option value="full">Full (we send messages)</option>
+    </select>
+
+    <button id="btnEstimate" class="btn" style="background:#2d6cdf;">View charges</button>
+    <div id="estimateResult" class="muted"></div>
+  </div>
+
+<script>
+  const base = window.location.origin;
+  function tokenHeader() {
+    const t = localStorage.getItem('accessToken') || '';
+    return t ? { 'Authorization': 'Bearer ' + t } : {};
+  }
+
+  async function loadFees() {
+    try {
+      const r = await fetch(base + '/admin/fees', { headers: Object.assign({'Content-Type':'application/json'}, tokenHeader()) });
+      const j = await r.json();
+      if (!r.ok) return document.getElementById('saveMsg').innerText = 'Failed to load fees: ' + (j.error || JSON.stringify(j));
+      const f = j.fees || {};
+      if (f.annual_fee != null) document.getElementById('annual_fee').value = f.annual_fee;
+      if (f.monthly_platform_fee_per_user != null) document.getElementById('monthly_platform_fee_per_user').value = f.monthly_platform_fee_per_user;
+      if (f.message_cost_per_booking != null) document.getElementById('message_cost_per_booking').value = f.message_cost_per_booking;
+      if (f.free_trial_days != null) document.getElementById('free_trial_days').value = f.free_trial_days;
+    } catch (err) {
+      document.getElementById('saveMsg').innerText = 'Network error: ' + err.message;
+    }
+  }
+
+  document.getElementById('btnSave').addEventListener('click', async () => {
+    const payload = {
+      fees: {
+        annual_fee: Number(document.getElementById('annual_fee').value || 0),
+        monthly_platform_fee_per_user: Number(document.getElementById('monthly_platform_fee_per_user').value || 0),
+        message_cost_per_booking: Number(document.getElementById('message_cost_per_booking').value || 0),
+        free_trial_days: Number(document.getElementById('free_trial_days').value || 0)
+      }
+    };
+    document.getElementById('saveMsg').innerText = 'Saving...';
+    try {
+      const r = await fetch(base + '/admin/fees', {
+        method: 'PUT',
+        headers: Object.assign({'Content-Type':'application/json'}, tokenHeader()),
+        body: JSON.stringify(payload)
+      });
+      const j = await r.json();
+      if (!r.ok) { document.getElementById('saveMsg').innerText = 'Save failed: ' + (j.error || JSON.stringify(j)); return; }
+      document.getElementById('saveMsg').innerText = 'Saved.';
+    } catch (err) {
+      document.getElementById('saveMsg').innerText = 'Network error: ' + err.message;
+    }
+  });
+
+  document.getElementById('btnEstimate').addEventListener('click', () => {
+    const users = Number(document.getElementById('estimate_users').value || 0);
+    const bookings = Number(document.getElementById('estimate_bookings').value || 0);
+    const mode = document.getElementById('estimate_mode').value;
+
+    // compute using loaded fields (client-side). This mirrors server logic used for actual billing.
+    const annual = Number(document.getElementById('annual_fee').value || 0);
+    const platform = Number(document.getElementById('monthly_platform_fee_per_user').value || 0) * users;
+    const messageCost = (mode === 'full') ? (bookings * Number(document.getElementById('message_cost_per_booking').value || 0) * 30) : 0;
+    const total = Number(annual) + Number(platform) + Number(messageCost);
+
+    const html = `
+      Annual fee: ₹${annual.toFixed(2)}\n
+      Platform (monthly * users): ₹${platform.toFixed(2)}\n
+      Message cost (monthly estimate): ₹${messageCost.toFixed(2)}\n
+      -------------------------\n
+      Estimated total (one-time show): ₹${total.toFixed(2)}
+    `;
+    document.getElementById('estimateResult').innerText = html;
+  });
+
+  loadFees();
+</script>
+</body>
+</html>
