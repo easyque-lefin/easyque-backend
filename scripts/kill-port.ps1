@@ -1,17 +1,21 @@
-param([int]$Port=5008)
+param([int]$Port = 5008)
 
-# Find any process listening on the port and kill it
-$listen = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-if ($listen) {
-  $pids = $listen | Select-Object -ExpandProperty OwningProcess | Sort-Object -Unique
-  foreach ($pid in $pids) {
-    try {
-      Stop-Process -Id $pid -Force -ErrorAction Stop
-      Write-Host "Killed PID $pid that was holding port $Port"
-    } catch {
-      Write-Host "Could not kill PID $pid: $($_.Exception.Message)"
-    }
+# Find any process listening on the given port and kill it
+$connections = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+
+if (-not $connections) {
+  Write-Host ("No process is listening on port {0}" -f $Port)
+  exit 0
+}
+
+$pids = $connections | Select-Object -ExpandProperty OwningProcess -Unique
+
+foreach ($p in $pids) {
+  try {
+    Stop-Process -Id $p -Force -ErrorAction Stop
+    Write-Host ("Killed PID {0} that was holding port {1}" -f $p, $Port)
   }
-} else {
-  Write-Host "No process is listening on port $Port"
+  catch {
+    Write-Host ("Could not kill PID {0}: {1}" -f $p, $_.Exception.Message)
+  }
 }
