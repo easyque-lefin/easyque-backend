@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Live Queue Status</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { --bg:#0b1220; --card:#121a2b; --text:#e6eefc; --muted:#9db0d3; --accent:#4fa3ff; --good:#23d18b; --warn:#ffd166; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
+    .container { max-width: 860px; margin: 0 auto; padding: 16px; }
+    .banner { width: 100%; height: 160px; background:#0e1729; border-radius: 16px; overflow:hidden; display:flex; align-items:center; justify-content:center; margin: 12px 0 20px; }
+    .banner img { width:100%; height:100%; object-fit: cover; }
+    .card { background: var(--card); border: 1px solid #1d2a44; border-radius: 16px; padding: 16px; margin-bottom: 16px; }
+    .title { font-size: 18px; color: var(--muted); margin-bottom: 6px; }
+    .value { font-size: 42px; font-weight: 800; letter-spacing: 0.5px; }
+    .row { display:flex; gap: 16px; flex-wrap:wrap; }
+    .col { flex: 1 1 240px; }
+    .org { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .org h1 { font-size: 20px; margin:0; }
+    .muted { color: var(--muted); }
+    .pill { display:inline-block; background:#0f223d; border:1px solid #1d3356; border-radius:999px; padding:6px 10px; color:#cfe1ff; font-size:12px; }
+    .footer { text-align:center; color:var(--muted); font-size:12px; margin: 24px 0 8px; }
+    .eta { color: var(--accent); font-weight: 700; }
+    .ok { color: var(--good); }
+    .warn { color: var(--warn); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="org card">
+      <h1 id="orgName">Live Queue</h1>
+      <span class="pill" id="datePill"></span>
+    </div>
+
+    <div class="banner" id="bannerBox">
+      <!-- banner image injected -->
+    </div>
+
+    <div class="row">
+      <div class="col card">
+        <div class="title">Now Serving</div>
+        <div class="value" id="currentServing">–</div>
+        <div class="muted" id="avgService">Avg service time: –</div>
+      </div>
+      <div class="col card">
+        <div class="title">Your Token</div>
+        <div class="value" id="yourToken">–</div>
+        <div class="muted">Position in queue: <span id="position">–</span></div>
+      </div>
+      <div class="col card">
+        <div class="title">Estimated Wait</div>
+        <div class="value eta" id="etaValue">–</div>
+        <div class="muted" id="etaDetail">Based on live average</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="title">Live Updates</div>
+      <div class="muted" id="liveNote">Connected…</div>
+    </div>
+
+    <div class="footer">Powered by EasyQue</div>
+  </div>
+
+  <script>
+    function qsel(id){ return document.getElementById(id); }
+    function formatDateISO(dstr){
+      try { const d = new Date(dstr); return d.toLocaleDateString(); } catch { return dstr; }
+    }
+    function secondsToWords(s){
+      if (!s || s <= 0) return '–';
+      const m = Math.floor(s / 60), sec = Math.floor(s % 60);
+      if (m > 60) { const h = Math.floor(m/60), rm = m % 60; return `${h}h ${rm}m`; }
+      return `${m}m ${sec}s`;
+    }
+    function computeETA(yourToken, currentServing, avgSeconds){
+      if (!yourToken || !avgSeconds) return null;
+      const pos = Math.max(0, (yourToken - (currentServing||0)));
+      return { pos, etaSec: pos * avgSeconds };
+    }
+
+    async function bootstrap(){
+      // queue_code is last segment of /status/:queue_code
+      const parts = location.pathname.split('/').filter(Boolean);
+      const queue_code = parts[parts.length - 1];
+
+      const r = await fetch(`/status/api/${queue_code}`);
+      const data = await r.json();
+      if (!data.ok) {
+        qsel('orgName').textContent = 'Invalid or expired link';
+        qsel('liveNote').textContent = 'Could not load status.';
+        return;
+      }
+
+      const { org, booking, now, stream_url } = data;
+
+      // UI set
+      qsel('orgName').textContent = org?.name || 'Live Queue';
+      qsel('datePill').textContent = 'Date: ' + formatDateISO(booking.booking_date);
+      qsel('yourToken').textContent = booking.token_no ?? '–';
+      qsel('currentServing').textContent = now.current_served ?? 0;
+      qsel('avgService').textContent = 'Avg service time: ' + (now.avg_seconds ? secondsToWords(now.avg_seconds) : '–');
+
+      // banner
+      const banner = org?.banner_url;
+      if (banner) {
+        const img = new Image();
+        img.src = banner.startsWith('http') ? banner : (banner.startsWith('/uploads') ? banner : '/'+banner.replace(/^\/+/,''));
+        img.alt = 'Organization Banner';
+        img.onload = () => {
+          const box = qsel('bannerBox');
+          box.innerHTML = '';
+          box.appendChild(img);
+        };
+      }
+
+      // ETA + position
+      const ei = computeETA(booking.token_no, now.current_served, now.avg_seconds);
+      if (ei) {
+        qsel('position').textContent = ei.pos;
+        qsel('etaValue').textContent = secondsToWords(ei.etaSec);
+        qsel('etaDetail').textContent = ei.pos === 0 ? 'You are next 🎉' : 'Estimated time based on average';
+      } else {
+        qsel('position').textContent = '–';
+        qsel('etaValue').textContent = '–';
+      }
+
+      // SSE
+      try {
+        const es = new EventSource(stream_url);
+        es.onmessage = (e) => {
+          const payload = JSON.parse(e.data || '{}');
+          if (typeof payload.current_served === 'number') {
+            qsel('currentServing').textContent = payload.current_served;
+          }
+          if (typeof payload.avg_seconds === 'number') {
+            qsel('avgService').textContent = 'Avg service time: ' + secondsToWords(payload.avg_seconds);
+          }
+          const upd = computeETA(booking.token_no, payload.current_served ?? now.current_served, payload.avg_seconds ?? now.avg_seconds);
+          if (upd) {
+            qsel('position').textContent = upd.pos;
+            qsel('etaValue').textContent = secondsToWords(upd.etaSec);
+            qsel('etaDetail').textContent = upd.pos === 0 ? 'You are next 🎉' : 'Estimated time based on average';
+          }
+          qsel('liveNote').textContent = 'Live – last update ' + new Date().toLocaleTimeString();
+        };
+        es.onerror = () => {
+          qsel('liveNote').textContent = 'Disconnected from live updates… (will retry automatically)';
+        };
+      } catch (e) {
+        qsel('liveNote').textContent = 'Live updates unavailable on this device.';
+      }
+    }
+
+    bootstrap().catch(() => {
+      qsel('liveNote').textContent = 'Failed to load.';
+    });
+  </script>
+</body>
+</html>
