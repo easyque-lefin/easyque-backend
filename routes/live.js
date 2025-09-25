@@ -1,11 +1,11 @@
 // routes/live.js
-// Simple Server-Sent Events (SSE) server for live queue updates.
-// Maintains in-memory subscribers per org. For production consider Redis pub/sub across processes.
+// Server-Sent Events for live queue updates.
+// Keep in-memory subscribers for now. For production use Redis pub/sub.
 
 const express = require('express');
 const router = express.Router();
 
-// map org_id -> Set of response objects
+// map org_id -> Set of responses
 const subscribers = new Map();
 
 function addSubscriber(orgId, res) {
@@ -19,11 +19,6 @@ function removeSubscriber(orgId, res) {
   if (subscribers.get(orgId).size === 0) subscribers.delete(orgId);
 }
 
-/**
- * publishOrgUpdate(orgId, payload)
- * payload should be a serializable object.
- * This function will be used by other routes to push updates to connected clients.
- */
 function publishOrgUpdate(orgId, payload) {
   const clients = subscribers.get(orgId);
   if (!clients) return;
@@ -32,7 +27,6 @@ function publishOrgUpdate(orgId, payload) {
     try {
       res.write(data);
     } catch (e) {
-      // ignore write errors; remove client
       try { removeSubscriber(orgId, res); res.end(); } catch(_) {}
     }
   }
@@ -43,17 +37,14 @@ router.get('/stream/:orgId', (req, res) => {
   res.set({
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
+    'Connection': 'keep-alive'
   });
   res.write('\n'); // handshake
-
   addSubscriber(orgId, res);
-
   req.on('close', () => {
     removeSubscriber(orgId, res);
   });
 });
 
-// Export router and publisher so other modules can require and call publishOrgUpdate
 module.exports = router;
 module.exports.publishOrgUpdate = publishOrgUpdate;
