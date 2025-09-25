@@ -115,7 +115,7 @@ router.post('/', async (req, res) => {
     const booking = created[0];
 
     // Build confirmation message
-    const msg = `Hi ${user_name}, your booking is confirmed (token ${booking.token_no}) on ${booking.booking_date}. Track live: ${booking.status_link}`;
+    const msg = `Hi ${user_name}, your booking is confirmed (token ${booking.token_no}) on ${booking.booking_date}. Track your live que: ${booking.status_link}`;
 
     // channel choice
     const channel = (prefer_channel === 'sms') ? 'sms' : 'whatsapp';
@@ -236,6 +236,3 @@ router.get('/export', async (req, res) => {
     return res.status(500).json({ ok:false, error:'server_error', details: err.message });
   }
 });
-
-module.exports = router;
-
