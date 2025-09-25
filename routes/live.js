@@ -1,50 +1,51 @@
 // routes/live.js
-// Server-Sent Events for live queue updates.
-// Keep in-memory subscribers for now. For production use Redis pub/sub.
+// SSE live stream for organization queue updates and a simple status endpoint to show current queue and banner info
 
 const express = require('express');
+const db = require('../db');
 const router = express.Router();
 
-// map org_id -> Set of responses
-const subscribers = new Map();
-
-function addSubscriber(orgId, res) {
-  if (!subscribers.has(orgId)) subscribers.set(orgId, new Set());
-  subscribers.get(orgId).add(res);
-}
-
-function removeSubscriber(orgId, res) {
-  if (!subscribers.has(orgId)) return;
-  subscribers.get(orgId).delete(res);
-  if (subscribers.get(orgId).size === 0) subscribers.delete(orgId);
-}
+const clientsByOrg = new Map(); // orgId -> Set(res)
 
 function publishOrgUpdate(orgId, payload) {
-  const clients = subscribers.get(orgId);
-  if (!clients) return;
-  const data = `data: ${JSON.stringify(payload)}\n\n`;
-  for (const res of clients) {
+  const set = clientsByOrg.get(String(orgId));
+  if (!set) return;
+  const data = JSON.stringify(payload);
+  for (const res of set) {
     try {
-      res.write(data);
+      res.write(`data: ${data}\n\n`);
     } catch (e) {
-      try { removeSubscriber(orgId, res); res.end(); } catch(_) {}
+      // ignore broken connection
     }
   }
 }
 
+/**
+ * SSE stream
+ * GET /live/stream/:orgId
+ */
 router.get('/stream/:orgId', (req, res) => {
-  const orgId = parseInt(req.params.orgId, 10);
-  res.set({
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive'
-  });
-  res.write('\n'); // handshake
-  addSubscriber(orgId, res);
+  const orgId = req.params.orgId;
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders && res.flushHeaders();
+
+  const key = String(orgId);
+  if (!clientsByOrg.has(key)) clientsByOrg.set(key, new Set());
+  clientsByOrg.get(key).add(res);
+
   req.on('close', () => {
-    removeSubscriber(orgId, res);
+    const s = clientsByOrg.get(key);
+    if (s) {
+      s.delete(res);
+      if (s.size === 0) clientsByOrg.delete(key);
+    }
   });
 });
 
+/**
+ * Helper for other routes to publish
+ */
 module.exports = router;
 module.exports.publishOrgUpdate = publishOrgUpdate;
