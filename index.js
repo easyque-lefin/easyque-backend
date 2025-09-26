@@ -1,115 +1,65 @@
-// index.js — EasyQue Backend Entry
-// - Strict port binding (0.0.0.0)
-// - Initializes DB
-// - Mounts all routes (bookings, orgs, users, status, live/SSE)
-// - Serves /public and /uploads
-// - Graceful shutdown + basic error handler
+// index.js — mounts all routes, strict port, static /public + /uploads, CORS, JWT parsing where needed
 
 require('dotenv').config();
-
 const express = require('express');
 const http = require('http');
-const cors = require('cors');
 const path = require('path');
-const bodyParser = require('body-parser');
-
-const { initDb } = require('./db');
+const cors = require('cors');
+const cookieParser = require('cookie-parser');
 
 const app = express();
+const server = http.createServer(app);
 
-/* --------------------------- Middleware --------------------------- */
-app.use(cors());
-app.use(bodyParser.json({ limit: '8mb' }));
-app.use(bodyParser.urlencoded({ extended: true }));
+// --- Core middleware
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
-/* --------------------------- Static files ------------------------- */
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// CORS: allow both your api + status subdomains during dev/tunnel
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:5008,https://api.easyque.org,https://status.easyque.org')
+  .split(',').map(s => s.trim());
+app.use(cors({ origin: CORS_ORIGINS, credentials: true }));
+
+// Static
 app.use('/public', express.static(path.join(__dirname, 'public')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-/* --------------------------- Health ------------------------------- */
+// Health
+app.get('/health', (req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
-app.get('/health', (_req, res) => res.json({ ok: true }));
+// --- DB helper (already in your project; keeping simple here)
+const db = require('./services/db'); // ensure this exports db.query
 
-/* --------------------------- status ------------------------------- */
+// --- Live bus / SSE (already present in your project)
+// const liveBus = require('./services/liveBus');
 
-app.use('/status', require('./routes/status'));
-/* --------------------------- reviews ------------------------------- */
-
-app.use('/reviews', require('./routes/reviews'));
-
-
-/* -------- helper: require route only if the file actually exists --- */
-function useIfExists(mountPath, relModulePath) {
-  try {
-    // Resolve throws if module does not exist
-    const resolved = require.resolve(relModulePath);
-    // eslint-disable-next-line global-require, import/no-dynamic-require
-    app.use(mountPath, require(resolved));
-    console.log(`[routes] mounted ${mountPath} -> ${relModulePath}`);
-  } catch {
-    console.log(`[routes] skipped ${mountPath} (missing: ${relModulePath})`);
-  }
-}
-
-/* --------------------------- Routes ------------------------------- */
-// Core routes (present)
-app.use('/bookings', require('./routes/bookings'));
-app.use('/orgs', require('./routes/orgs'));
+// --- Routes (core)
+app.use('/auth', require('./routes/auth'));
 app.use('/users', require('./routes/users'));
-app.use('/status', require('./routes/status'));
-app.use('/live', require('./routes/live')); // Server-Sent Events stream
+app.use('/bookings', require('./routes/bookings'));
+app.use('/orgs', require('./routes/orgs'));               // your existing orgs route
+app.use('/organizations', require('./routes/organizations')); // ✅ mount so UI calls work
+app.use('/payments', require('./routes/payments'));
+app.use('/billing', require('./routes/billing'));
 
-// Optional routes (mount only if files exist)
-useIfExists('/admin', './routes/admin');
-useIfExists('/billing', './routes/billing');
-useIfExists('/notifications', './routes/notifications');
+// --- New/Updated routes in this delivery
+app.use('/status', require('./routes/status'));   // ✅ returns { org, booking, metrics }
+app.use('/reviews', require('./routes/reviews')); // ✅ internal reviews system
 
-/* --------- Root: quick status page (opens /public/status.html) ---- */
-app.get('/', (_req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'status.html'));
+// --- Fallback: serve minimal index or 404
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-/* --------------------------- 404 fallback ------------------------- */
-app.use((req, res, _next) => {
-  res.status(404).json({ ok: false, error: 'not_found', path: req.path });
+// Error handler
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  console.error('ERR', err);
+  res.status(err.status || 500).json({ ok: false, error: err.message || 'Server error' });
 });
 
-/* --------------------------- Error handler ------------------------ */
-app.use((err, _req, res, _next) => {
-  // Avoid leaking internals in production
-  const status = err.status || err.statusCode || 500;
-  console.error('Error:', err);
-  res.status(status).json({
-    ok: false,
-    error: err.code || err.name || 'internal_error',
-    message: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : (err.message || 'Error'),
-  });
+const PORT = Number(process.env.PORT || 5008);
+server.listen(PORT, () => {
+  console.log(`EasyQue backend running on http://localhost:${PORT}`);
 });
-
-/* --------------------------- Bootstrap --------------------------- */
-(async () => {
-  try {
-    await initDb();
-
-    const PORT = parseInt(process.env.PORT || '5008', 10);
-    const server = http.createServer(app);
-
-    server.listen(PORT, '0.0.0.0', () => {
-      console.log(`EasyQue backend listening on :${PORT}`);
-    });
-
-    // Graceful shutdown
-    const shutdown = () => {
-      console.log('Shutting down...');
-      server.close(() => process.exit(0));
-      // If not closed in 10s, force-exit
-      setTimeout(() => process.exit(1), 10_000).unref();
-    };
-    process.on('SIGINT', shutdown);
-    process.on('SIGTERM', shutdown);
-  } catch (err) {
-    console.error('Initialization error:', err);
-    process.exit(1);
-  }
-})();
 
