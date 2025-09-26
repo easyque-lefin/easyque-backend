@@ -1,135 +1,106 @@
+// routes/orgs.js
+// Org CRUD bits: banner upload + google_review_url + set limits
+
 const express = require('express');
 const router = express.Router();
-const db = require('../db');
-const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { sendLive } = require('../services/liveBus');
+const multer = require('multer');
+const db = require('../services/db');
 
-// Where files are written
-const uploadDir = path.join(process.cwd(), 'uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+const upload = multer({ dest: path.join(__dirname, '..', 'uploads') });
 
-// Public base used to build absolute file URLs
-// keep default for production; adjust in .env if needed
-const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://api.easyque.org';
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname || '.png');
-    cb(null, `org_${req.params.id}_banner${ext}`);
-  }
-});
-const upload = multer({ storage });
-
-/**
- * Upload/replace organization banner
- * Field name: "banner" (multipart/form-data)
- */
-router.post('/:id/banner', upload.single('banner'), async (req, res, next) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (!id || !req.file) return res.status(400).json({ ok: false, error: 'missing_file_or_id' });
-
-    // Path served by Express static: app.use('/uploads', express.static(...))
-    const relPath = `/uploads/${path.basename(req.file.path)}`;
-
-    // Build absolute public URL for cross-origin consumers (status subdomain, mobile, etc.)
-    const publicUrl = `${PUBLIC_BASE_URL}${relPath}`;
-
-    // Keep both for backward compatibility: one column may already be used by your page
-    await db.query(
-      `UPDATE organizations SET banner_url = ?, org_banner_url = ? WHERE id = ?`,
-      [publicUrl, publicUrl, id]
-    );
-
-    res.json({ ok: true, banner_url: publicUrl });
-    // Nudge any live subscribers to refresh
-    sendLive(id, null);
-  } catch (err) { next(err); }
-});
-
-/**
- * (Optional) Simple GET /orgs/:id so tools/pages can read org info
- * If you already have this elsewhere you can keep your version.
- */
+// GET org by id
 router.get('/:id', async (req, res, next) => {
   try {
-    const id = parseInt(req.params.id, 10);
-    const [rows] = await db.query(`SELECT * FROM organizations WHERE id = ? LIMIT 1`, [id]);
-    if (!rows || !rows.length) return res.status(404).json({ ok: false, error: 'not_found' });
-    res.json(rows[0]);
-  } catch (err) { next(err); }
+    const { id } = req.params;
+    const [[org]] = await db.query(`SELECT * FROM organizations WHERE id = ?`, [id]);
+    if (!org) return res.status(404).json({ ok: false, error: 'Not found' });
+    res.json({ ok: true, org });
+  } catch (e) { next(e); }
 });
 
-// ------- break toggle APIs (unchanged) -------
-router.post('/:id/break/start', async (req, res, next) => {
+// Upload banner + set google_review_url
+router.post('/:id/banner', upload.single('banner'), async (req, res, next) => {
   try {
-    const org_id = parseInt(req.params.id, 10);
-    const user_id = parseInt(req.body.user_id, 10);
-    const until = req.body.until ? new Date(req.body.until) : null;
-    const reason = (req.body.reason || '').trim();
+    const { id } = req.params;
+    const { google_review_url } = req.body || {};
+    let url = null;
+    if (req.file) {
+      const ext = path.extname(req.file.originalname || '') || '.jpg';
+      const final = path.join(req.file.destination, `${req.file.filename}${ext}`);
+      fs.renameSync(req.file.path, final);
+      url = `/uploads/${path.basename(final)}`;
+      await db.query(`UPDATE organizations SET org_banner_url = ? WHERE id = ?`, [url, id]);
+    }
+    if (google_review_url) {
+      await db.query(`UPDATE organizations SET google_review_url = ? WHERE id = ?`, [google_review_url, id]);
+    }
+    res.json({ ok: true, url });
+  } catch (e) { next(e); }
+});
 
-    if (!org_id || !user_id) return res.status(400).json({ ok: false, error: 'missing_params' });
-
-    const now = new Date();
+// Set org limits and plan mode (semi/full) + users_count + expected_bookings_per_day
+router.post('/:id/limits', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { plan_mode, users_count, expected_bookings_per_day } = req.body || {};
+    const monthly = expected_bookings_per_day ? Number(expected_bookings_per_day) * 30 : null;
     await db.query(
       `UPDATE organizations
-         SET breaking_user_id = ?, break_started_at = ?, break_until = ?
+       SET plan_mode = COALESCE(?, plan_mode),
+           users_count = COALESCE(?, users_count),
+           expected_bookings_per_day = COALESCE(?, expected_bookings_per_day),
+           monthly_expected_bookings = COALESCE(?, monthly_expected_bookings)
        WHERE id = ?`,
-      [user_id, now, until, org_id]
+      [plan_mode || null, users_count || null, expected_bookings_per_day || null, monthly, id]
     );
-    await db.query(
-      `INSERT INTO org_breaks (org_id, user_id, started_at, reason) VALUES (?, ?, ?, ?)`,
-      [org_id, user_id, now, reason || null]
-    );
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
 
-    res.json({ ok: true, started_at: now, break_until: until || null });
-    sendLive(org_id, user_id);
-  } catch (err) { next(err); }
+// Break controls (per assignee)
+router.post('/:id/break/start', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { user_id, minutes = 15 } = req.body || {};
+    if (!user_id) return res.status(400).json({ ok: false, error: 'user_id required' });
+
+    // Store in assigned_live_metrics (org_id, assigned_user_id, booking_date=today)
+    const today = new Date();
+    const yyyy = today.getFullYear(), mm = String(today.getMonth()+1).padStart(2,'0'), dd = String(today.getDate()).padStart(2,'0');
+    const booking_date = `${yyyy}-${mm}-${dd}`;
+    const until = new Date(Date.now() + Number(minutes)*60000);
+
+    await db.query(
+      `INSERT INTO assigned_live_metrics
+       (org_id, assigned_user_id, booking_date, break_started_at, break_until, updated_at)
+       VALUES (?,?,?,?,?, NOW())
+       ON DUPLICATE KEY UPDATE break_started_at=VALUES(break_started_at), break_until=VALUES(break_until), updated_at=NOW()`,
+      [id, user_id, booking_date, new Date(), until]
+    );
+    res.json({ ok: true, break_until: until });
+  } catch (e) { next(e); }
 });
 
 router.post('/:id/break/end', async (req, res, next) => {
   try {
-    const org_id = parseInt(req.params.id, 10);
-    const user_id = parseInt(req.body.user_id, 10);
-    if (!org_id || !user_id) return res.status(400).json({ ok: false, error: 'missing_params' });
+    const { id } = req.params;
+    const { user_id } = req.body || {};
+    if (!user_id) return res.status(400).json({ ok: false, error: 'user_id required' });
 
-    const now = new Date();
-    await db.query(
-      `UPDATE organizations
-         SET breaking_user_id = NULL, break_started_at = NULL, break_until = NULL
-       WHERE id = ? AND breaking_user_id = ?`,
-      [org_id, user_id]
-    );
-    await db.query(
-      `UPDATE org_breaks SET ended_at = ? WHERE org_id = ? AND user_id = ? AND ended_at IS NULL`,
-      [now, org_id, user_id]
-    );
+    const today = new Date();
+    const yyyy = today.getFullYear(), mm = String(today.getMonth()+1).padStart(2,'0'), dd = String(today.getDate()).padStart(2,'0');
+    const booking_date = `${yyyy}-${mm}-${dd}`;
 
-    res.json({ ok: true, ended_at: now });
-    sendLive(org_id, user_id);
-  } catch (err) { next(err); }
+    await db.query(
+      `UPDATE assigned_live_metrics
+       SET break_until = NULL, break_started_at = NULL, updated_at = NOW()
+       WHERE org_id = ? AND assigned_user_id = ? AND booking_date = ?`,
+      [id, user_id, booking_date]
+    );
+    res.json({ ok: true });
+  } catch (e) { next(e); }
 });
 
 module.exports = router;
-
-
-// GET /orgs/:id -> return org row (id, name, banner_url, org_banner_url, etc.)
-router.get('/:id', async (req, res, next) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    const [rows] = await db.query(
-      `SELECT id, name, banner_url, org_banner_url FROM organizations WHERE id = ? LIMIT 1`,
-      [id]
-    );
-    if (!rows || rows.length === 0) {
-      return res.status(404).json({ ok: false, error: 'org_not_found' });
-    }
-    res.json(rows[0]);
-  } catch (err) {
-    next(err);
-  }
-});
-
