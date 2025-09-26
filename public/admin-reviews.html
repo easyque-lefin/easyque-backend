@@ -1,0 +1,38 @@
+<!doctype html><meta charset="utf-8"/>
+<title>EasyQue — User Reviews</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<style>body{font-family:Inter,sans-serif;margin:24px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #eee;padding:8px}thead{background:#fafafa}</style>
+<h2>User Reviews</h2>
+<div>
+  <label>Org ID <input id="org" type="number" style="width:120px"/></label>
+  <label>Assigned User ID <input id="ass" type="number" style="width:140px"/></label>
+  <label>Min ⭐ <input id="min" type="number" min="1" max="5" value="1" style="width:60px"/></label>
+  <label>Max ⭐ <input id="max" type="number" min="1" max="5" value="5" style="width:60px"/></label>
+  <label>From <input id="from" type="date"/></label>
+  <label>To <input id="to" type="date"/></label>
+  <button id="load">Load</button>
+</div>
+<table id="tbl"><thead><tr>
+  <th>Created</th><th>Rating</th><th>Review</th><th>Booking ID</th><th>Assigned User</th>
+</tr></thead><tbody></tbody></table>
+<script>
+const $=s=>document.querySelector(s);
+$('#load').onclick=async()=>{
+  const q=new URLSearchParams({
+    org_id: $('#org').value,
+    assigned_user_id: $('#ass').value || '',
+    min: $('#min').value, max: $('#max').value,
+    from: $('#from').value, to: $('#to').value,
+  });
+  const r=await fetch('/reviews?'+q.toString(), {credentials:'same-origin'});
+  const j=await r.json(); const tb=$('#tbl tbody'); tb.innerHTML='';
+  (j.items||[]).forEach(x=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${new Date(x.created_at).toLocaleString()}</td>
+      <td>${x.rating}</td><td>${x.review||''}</td>
+      <td>${x.booking_id||''}</td><td>${x.assigned_user_id||''}</td>`;
+    tb.appendChild(tr);
+  });
+};
+</script>
