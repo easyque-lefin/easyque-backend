@@ -33,6 +33,9 @@ app.get('/health', (_req, res) => res.json({ ok: true }));
 /* --------------------------- status ------------------------------- */
 
 app.use('/status', require('./routes/status'));
+/* --------------------------- reviews ------------------------------- */
+
+app.use('/reviews', require('./routes/reviews'));
 
 
 /* -------- helper: require route only if the file actually exists --- */
