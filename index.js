@@ -122,6 +122,10 @@ server.on('error', (err) => {
   }
 });
 
+// Start daily billing scheduler (02:00 run)
+try { require('./services/billingScheduler').start(); } catch { console.warn('BillingScheduler not started'); }
+
+
 server.listen(PORT, () => {
   console.log(`EasyQue backend running on http://localhost:${PORT}`);
 });
