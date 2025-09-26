@@ -2,474 +2,597 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, maximum-scale=1"
+  />
   <title>EasyQue — Live Queue Status</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="color-scheme" content="light dark" />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+
   <style>
-    :root {
-      --bg: #0b1020;
-      --card: #121933;
-      --muted: #9aa4c7;
-      --text: #e7ecff;
-      --accent: #6ea8ff;
-      --ok: #3ddc84;
-      --warn: #ffd166;
-      --danger: #ff6b6b;
-      --border: #243056;
-      --grad1: #3a7bd5;
-      --grad2: #00d2ff;
+    :root{
+      --bg:#f7fbff;
+      --card:#ffffff;
+      --ink:#0e2233;
+      --ink-dim:#4a5b6b;
+      --accent:#2ea7ff;
+      --accent-2:#0ad07f;
+      --danger:#ff4d6d;
+      --muted:#e6eef5;
+      --brand:#3ba56c;
+      --pill-start:#3d8bff;
+      --pill-end:#ff3b7a;
+      --shadow: 0 10px 24px rgba(8, 28, 44, .08);
+      --round: 18px;
     }
     * { box-sizing: border-box; }
-    html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text);
-      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans";
+    body{
+      margin:0;
+      background:var(--bg);
+      color:var(--ink);
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", sans-serif;
     }
-    a { color: var(--accent); text-decoration: none; }
-    .container { max-width: 980px; margin: 0 auto; padding: 16px; }
+
+    .page{
+      max-width: 420px;
+      margin: 0 auto;
+      padding-bottom: 48px;
+    }
 
     /* Header */
-    .header { display: grid; grid-template-columns: 96px 1fr; gap: 16px; align-items: center; margin-bottom: 16px; }
-    .banner { width: 96px; height: 96px; border-radius: 12px; background: #0f1730; border: 1px solid var(--border);
-      overflow: hidden; display: grid; place-items: center; font-size: 12px; color: var(--muted); }
-    .banner img { width: 100%; height: 100%; object-fit: cover; display: block; }
-    .org-meta { display: grid; gap: 8px; }
-    .org-title {
-      display: inline-flex; align-items: center; gap: 10px;
-      padding: 10px 14px;
+    .topbar{
+      display:flex;
+      align-items:center;
+      gap:12px;
+      padding:14px 16px;
+    }
+    .logo-wrap{
+      display:flex;
+      align-items:center;
+      gap:10px;
+    }
+    .logo{
+      width:48px; height:48px;
+      border-radius:12px;
+      display:grid; place-items:center;
+      background:#fff;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .logo svg{ width:36px; height:36px; }
+    .live-tag{
+      font-weight:800;
+      color:var(--brand);
+      letter-spacing:.06em;
+      font-size:12px;
+    }
+
+    /* Org pill */
+    .org-pill{
+      margin:8px 16px 0;
+      background: linear-gradient(90deg, var(--pill-start), var(--pill-end));
+      color:#fff;
       border-radius: 14px;
-      background: linear-gradient(90deg, var(--grad1), var(--grad2));
-      color: #fff; font-weight: 700; letter-spacing: .2px; font-size: 18px;
-      width: fit-content;
-      box-shadow: 0 6px 18px rgba(0,0,0,.25);
+      padding:12px 16px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      box-shadow: var(--shadow);
     }
-    .map-icon {
-      width: 22px; height: 22px; display: inline-flex; cursor: pointer;
-      border-radius: 6px; background: rgba(255,255,255,.18);
-      border: 1px solid rgba(255,255,255,.25);
-      align-items: center; justify-content: center;
+    .org-name{
+      font-weight:800;
+      font-size:18px;
+      line-height:1.2;
     }
-    .map-icon svg { width: 16px; height: 16px; display: block; }
-    .org-sub { display: flex; gap: 8px; flex-wrap: wrap; }
-    .pill {
-      display: inline-flex; align-items: center; gap: 8px;
-      padding: 6px 10px; border: 1px solid var(--border); background: var(--card);
-      border-radius: 999px; font-size: 12px; color: var(--muted);
+    .map-btn{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      width:36px; height:36px;
+      border-radius: 10px;
+      background: rgba(255,255,255,.18);
+      border:1px solid rgba(255,255,255,.35);
+      color:#fff;
+      text-decoration:none;
     }
+    .map-btn svg{ width:20px; height:20px; }
 
-    /* Grid */
-    .grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
-    @media (min-width: 720px) { .grid { grid-template-columns: 1fr 1fr; } }
-
-    /* Card */
-    .card { background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent 40%), var(--card);
-      border: 1px solid var(--border); border-radius: 16px; padding: 16px; position: relative; overflow: hidden; }
-    .card h2 { margin: 0 0 12px 0; font-size: 14px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted); }
-    .metric { font-size: 56px; font-weight: 700; letter-spacing: 1px; line-height: 1; }
-    .metric.sm { font-size: 36px; }
-    .muted { color: var(--muted); font-size: 12px; }
-
-    /* Status bar + break */
-    .status-bar { margin-top: 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
-    .badge { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--border); background: #1a2448; color: var(--muted); font-size: 12px; }
-    .badge.break { border-color: rgba(255, 107, 107, .35); background: rgba(255, 107, 107, .08); color: #ff9b9b; }
-    .fade { animation: fade .5s ease; }
-    @keyframes fade { from { opacity: .4 } to { opacity: 1 } }
-
-    /* Token cards (like wireframe) */
-    .token-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    .token-card {
-      border-radius: 16px; padding: 16px;
-      background: radial-gradient(140% 120% at 100% -20%, rgba(255,255,255,.04), rgba(255,255,255,.01)), var(--card);
-      border: 1px solid var(--border);
+    /* Banner */
+    .banner-card{
+      margin:14px 16px;
+      background:var(--card);
+      border-radius: var(--round);
+      box-shadow: var(--shadow);
+      padding:12px;
     }
-    .token-card h3 { margin: 0 0 8px 0; color: var(--muted); text-transform: uppercase; font-size: 12px; letter-spacing: 1px; }
-    .token-card .num { font-size: 56px; font-weight: 800; }
-
-    /* Progress bar */
-    .progress { height: 12px; background: rgba(255,255,255,.06); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
-    .progress > span { display: block; height: 100%;
-      background: linear-gradient(90deg, #62d26f, #2dc8ff);
-      width: 0%;
-      transition: width .3s ease;
+    .banner{
+      width:100%;
+      height:160px;
+      object-fit:cover;
+      border-radius: 12px;
+      background:#eef4f8;
     }
 
-    /* Inputs */
-    .row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
-    label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
-    input, button {
-      width: 100%; background: #0c1330; color: var(--text); border: 1px solid var(--border);
-      border-radius: 10px; padding: 10px 12px; font-size: 14px; outline: none;
+    /* Queue block */
+    .queue-card{
+      margin:14px 16px;
+      background: linear-gradient(180deg, #dff1ff 0%, #eff8ff 100%);
+      border-radius: var(--round);
+      padding:18px 14px 16px;
+      box-shadow: var(--shadow);
+      position:relative;
     }
-    input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(110,168,255,0.25); }
-    button { cursor: pointer; transition: transform .05s ease; }
-    button:hover { transform: translateY(-1px); }
-    .btn-accent { background: #132450; border-color: #2a4d9c; width: 160px; }
 
-    /* Booking info panel */
-    .info-split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    .divider { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: center; margin-top: 10px; }
-    .chip { padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: rgba(255,255,255,.03); font-weight: 600; }
-    .list { display: grid; gap: 8px; }
-    .list .item { display: flex; justify-content: space-between; gap: 12px; padding: 12px; border: 1px dashed var(--border); border-radius: 12px; background: rgba(255,255,255,0.02); }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Courier New", monospace; }
+    .break-badge{
+      position:absolute;
+      top:-12px;
+      left:50%;
+      transform: translateX(-50%);
+      background:#5179ff;
+      color:#fff;
+      padding:8px 12px;
+      font-size:11px;
+      border-radius: 12px 12px 12px 12px;
+      min-width: 210px;
+      text-align:center;
+      box-shadow: 0 8px 18px rgba(81,121,255,.35);
+      display:none;
+    }
+    .break-badge.on{ display:block; }
+
+    .qtop{
+      display:flex;
+      align-items:flex-end;
+      justify-content:space-between;
+      gap:10px;
+      margin-top:20px;
+    }
+
+    .q-col{
+      width:46%;
+      background:#2f66a8;
+      color:#fff;
+      padding:16px 10px 14px;
+      border-radius: 12px;
+      text-align:center;
+      position:relative;
+    }
+    .q-title{
+      font-size:13px;
+      letter-spacing:.02em;
+      opacity:.95;
+      font-weight:600;
+    }
+    .q-num{
+      font-weight:800;
+      font-size:44px;
+      line-height:1;
+      margin-top:6px;
+    }
+
+    .q-people{
+      width:64px;
+      height:64px;
+      margin:0 auto -12px;
+      background: #0e2233;
+      border-radius:50%;
+      display:grid;
+      place-items:center;
+      color:#fff;
+      box-shadow: 0 10px 20px rgba(14, 34, 51, .35);
+    }
+    .q-people svg{ width:36px; height:36px; }
+
+    .progress{
+      margin:14px auto 4px;
+      width:76%;
+      height:10px;
+      border-radius:999px;
+      background:#dbe8f2;
+      overflow:hidden;
+      box-shadow: inset 0 1px 2px rgba(0,0,0,.06);
+    }
+    .progress > i{
+      display:block;
+      height:100%;
+      width:0%;
+      background: linear-gradient(90deg, #28dba3, #8ae28a);
+      transition: width .4s ease;
+    }
+    .progress-text{
+      text-align:center;
+      font-size:11px;
+      color:var(--ink-dim);
+      margin-top:2px;
+    }
+
+    /* Service info split pill */
+    .service-pill{
+      margin:14px 16px;
+      background:#ffeeda;
+      border-radius: 18px;
+      display:flex;
+      overflow:hidden;
+      border:1px solid #ffd7ad;
+    }
+    .service-side{
+      width:50%;
+      padding:14px 12px;
+      text-align:center;
+    }
+    .service-side + .service-side{
+      border-left:1px dashed #ffbf83;
+      background:#fff5ea;
+    }
+    .service-title{
+      color:#ff6f32;
+      font-size:13px;
+      font-weight:700;
+    }
+    .service-value{
+      margin-top:6px;
+      font-weight:800;
+      font-size:16px;
+      color:#0e2233;
+    }
+
+    /* Booking info */
+    .section-title{
+      margin:18px 16px 6px;
+      font-weight:800;
+      text-align:center;
+    }
+
+    .book-card{
+      margin:6px 16px 10px;
+      background:var(--card);
+      border-radius: var(--round);
+      padding:14px;
+      box-shadow: var(--shadow);
+    }
+    .row{
+      display:flex;
+      align-items:flex-start;
+      gap:10px;
+      margin:6px 0;
+      font-size:14px;
+      color:var(--ink);
+    }
+    .row b{
+      width:46%;
+      color:var(--ink-dim);
+      font-weight:700;
+    }
+    .row span{
+      width:54%;
+      font-weight:600;
+      color:#0e2233;
+      word-break: break-word;
+    }
+
+    .note{
+      margin:14px 16px 0;
+      color:#5f6f7d;
+      font-size:11.5px;
+      text-align:center;
+    }
   </style>
 </head>
 <body>
-  <div class="container">
+  <main class="page" id="page">
+
     <!-- Header -->
-    <header class="header">
-      <div class="banner" id="bannerBox">Logo<img id="banner" alt="Organization banner" style="display:none" /></div>
-      <div class="org-meta">
-        <div class="org-title" id="orgTitle">
-          <span id="orgName">Organization Name</span>
-          <span class="map-icon" id="mapBtn" title="Open in Google Maps" aria-label="Open map">
-            <!-- Simple location pin icon -->
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 22s-7-7.33-7-12a7 7 0 1 1 14 0c0 4.67-7 12-7 12z"></path>
-              <circle cx="12" cy="10" r="3"></circle>
-            </svg>
-          </span>
+    <div class="topbar">
+      <div class="logo-wrap">
+        <div class="logo" aria-hidden="true">
+          <!-- Simple mark that resembles your EasyQue tick/arrow -->
+          <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <rect x="4" y="4" width="56" height="56" rx="12" fill="#eff7ef"/>
+            <path d="M13 34l10 10 28-28" stroke="#24c069" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="18" cy="20" r="5" fill="#ff8b2c"/>
+          </svg>
         </div>
-        <div class="org-sub">
-          <span class="pill">Org ID: <span class="mono" id="orgIdText">—</span></span>
-          <span class="pill">Assigned User: <span class="mono" id="assignedIdText">All</span></span>
-          <span class="pill" title="When this queue started today">Service Start: <span class="mono" id="serviceStart">—</span></span>
-          <span class="pill">Last Update: <span class="mono" id="lastUpdate">—</span></span>
+        <div>
+          <div style="font-weight:800;">EASYQUE</div>
+          <div class="live-tag">LIVE  QUE  STATUS</div>
         </div>
       </div>
-    </header>
-
-    <!-- Connection / Break / Avg -->
-    <div class="status-bar">
-      <div class="badge break" id="breakBadge" style="display:none;">On Break — resumes in <span id="breakCountdown" class="mono">--:--</span></div>
-      <div class="badge" id="connBadge">Connecting…</div>
-      <div class="badge" id="avgBadge">Avg. Service Time: <span class="mono" id="avgHuman">—</span></div>
     </div>
 
-    <!-- Main -->
-    <main class="grid" style="margin-top:16px;">
-      <!-- Left: Now Serving + Your Token + Progress + ETA -->
-      <section class="card">
-        <h2>Live Queue</h2>
+    <!-- Org pill -->
+    <div class="org-pill">
+      <div class="org-name" id="orgName">Organization Name</div>
+      <a id="mapLink" class="map-btn" href="#" target="_blank" title="Open location">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 2C8.7 2 6 4.7 6 8c0 4.5 6 12 6 12s6-7.5 6-12c0-3.3-2.7-6-6-6zm0 8.2c-1.2 0-2.2-1-2.2-2.2S10.8 5.8 12 5.8s2.2 1 2.2 2.2S13.2 10.2 12 10.2z"/>
+        </svg>
+      </a>
+    </div>
 
-        <div class="token-cards" style="margin-bottom:12px;">
-          <div class="token-card">
-            <h3>Current Served Token</h3>
-            <div class="num" id="nowServing">—</div>
-          </div>
-          <div class="token-card">
-            <h3>Your Token No</h3>
-            <div class="num" id="yourTokenShown">—</div>
-          </div>
+    <!-- Banner -->
+    <div class="banner-card">
+      <img id="bannerImg" class="banner" alt="Organization banner" src="" />
+    </div>
+
+    <!-- Queue section -->
+    <section class="queue-card">
+      <div id="breakBadge" class="break-badge">On break</div>
+
+      <div class="qtop">
+        <div class="q-col">
+          <div class="q-title">Current Served<br/>Token</div>
+          <div class="q-num" id="nowServing">–</div>
         </div>
 
-        <div class="progress" aria-label="Progress towards your token">
-          <span id="progressBar" style="width:0%;"></span>
-        </div>
-        <div class="muted" style="margin-top:6px;">Progress to your turn</div>
-
-        <div class="row" style="margin-top:14px;">
-          <div style="flex:1 1 160px;">
-            <label for="yourToken">Enter your token</label>
-            <input id="yourToken" type="number" min="1" inputmode="numeric" placeholder="e.g., 25" />
-          </div>
-          <button id="saveTokenBtn" class="btn-accent">Save Token</button>
+        <div class="q-people" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path fill="white" d="M12 12c2.2 0 4-1.8 4-4S14.2 4 12 4 8 5.8 8 8s1.8 4 4 4zm6 1h-1.3c-.8.4-1.7.7-2.7.7s-1.9-.3-2.7-.7H10c-3.3 0-6 2.7-6 6v1c0 .6.4 1 1 1h18c.6 0 1-.4 1-1v-1c0-3.3-2.7-6-6-6z"/>
+          </svg>
         </div>
 
-        <div class="divider">
-          <div class="chip">Service start time: <span class="mono" id="serviceStartChip">—</span></div>
-          <div class="chip">Avg. Service time till now: <span class="mono" id="avgHumanChip">—</span></div>
+        <div class="q-col">
+          <div class="q-title">Your<br/>Token No</div>
+          <div class="q-num" id="yourToken">–</div>
         </div>
+      </div>
 
-        <div style="margin-top:12px;">
-          <div class="metric sm" id="eta">—</div>
-          <div class="muted">Expected Wait</div>
-        </div>
-      </section>
+      <div class="progress" aria-label="Queue progress">
+        <i id="progressFill" style="width:0%"></i>
+      </div>
+      <div class="progress-text" id="progressText">0% completed</div>
+    </section>
 
-      <!-- Right: Booking Info Panel -->
-      <section class="card">
-        <h2>Booking Info</h2>
-        <div class="list">
-          <div class="item"><div>Name</div><div class="mono" id="bkName">—</div></div>
-          <div class="item"><div>Assigned User</div><div class="mono" id="bkAssigned">—</div></div>
-          <div class="item"><div>Booking Date &amp; Time</div><div class="mono" id="bkDt">—</div></div>
-          <div class="item"><div>Department</div><div class="mono" id="bkDept">—</div></div>
-          <div class="item"><div>Booking ID</div><div class="mono" id="bkId">—</div></div>
-        </div>
-      </section>
-    </main>
+    <!-- Service info pill -->
+    <div class="service-pill">
+      <div class="service-side">
+        <div class="service-title">Service start time</div>
+        <div class="service-value" id="serviceStart">–</div>
+      </div>
+      <div class="service-side">
+        <div class="service-title">Avg.Service time till now</div>
+        <div class="service-value" id="avgService">–</div>
+      </div>
+    </div>
 
-    <footer class="status-bar" style="margin-bottom:18px;">
-      <span>The queue status updates when the staff marks a token as served. If your status isn’t updating, please contact the organization directly.</span>
-    </footer>
-  </div>
+    <!-- Booking info -->
+    <div class="section-title">Booking Info</div>
+    <div class="book-card" id="bookCard">
+      <div class="row"><b>Name:</b> <span id="userName">–</span></div>
+      <div class="row"><b>Assigned User:</b> <span id="assignedUser">–</span></div>
+      <div class="row"><b>Department:</b> <span id="department">–</span></div>
+
+      <div class="row"><b>Booking ID:</b> <span id="bookingId">–</span></div>
+      <div class="row"><b>Booking Date&Time:</b> <span id="bookingDT">–</span></div>
+      <div class="row"><b>Phone No:</b> <span id="userPhone">–</span></div>
+    </div>
+
+    <div class="note">
+      The queue status is only updated when the person you've booked marks the token as served.
+      If your status isn't updating, please contact that person directly.
+    </div>
+  </main>
 
   <script>
-    (function () {
-      // --- Helpers ---
-      const $ = (id) => document.getElementById(id);
-      const qs = new URLSearchParams(location.search);
-      const formatDateTime = (d) => {
-        if (!d) return '—';
-        const dt = (d instanceof Date) ? d : new Date(d);
-        if (Number.isNaN(+dt)) return '—';
-        const opt = { hour: 'numeric', minute: '2-digit' };
-        return dt.toLocaleString(undefined, opt);
-      };
-      const formatFull = (d) => {
-        if (!d) return '—';
-        const dt = (d instanceof Date) ? d : new Date(d);
-        if (Number.isNaN(+dt)) return '—';
-        return dt.toLocaleString();
-      };
-      const secsHuman = (s) => {
-        s = Math.max(0, Math.round(s || 0));
-        if (s < 60) return s + 's';
-        const m = Math.floor(s / 60), r = s % 60;
-        if (m < 60) return r ? `${m}m ${r}s` : `${m}m`;
-        const h = Math.floor(m / 60), mm = m % 60;
-        return mm ? `${h}h ${mm}m` : `${h}h`;
-      };
-      const clampInt = (v, min=0) => {
-        const n = parseInt(v, 10);
-        return Number.isFinite(n) ? Math.max(min, n) : min;
-      };
+    // -------------------------
+    // Utilities
+    // -------------------------
+    const $ = (sel) => document.querySelector(sel);
+    const params = new URLSearchParams(location.search);
+    const orgId = params.get('org_id');
+    const tokenNo = parseInt(params.get('token') || params.get('viewer_token') || '0', 10) || 0;
+    const assignedUserId = params.get('assigned_user_id');
 
-      // --- Elements ---
-      const orgNameEl = $('orgName');
-      const orgIdText = $('orgIdText');
-      const assignedIdText = $('assignedIdText');
-      const nowServingEl = $('nowServing');
-      const yourTokenShownEl = $('yourTokenShown');
-      const avgHumanEl = $('avgHuman');
-      const avgHumanChipEl = $('avgHumanChip');
-      const serviceStartEl = $('serviceStart');
-      const serviceStartChipEl = $('serviceStartChip');
-      const lastUpdateEl = $('lastUpdate');
-      const breakBadge = $('breakBadge');
-      const breakCountdownEl = $('breakCountdown');
-      const banner = $('banner');
-      const bannerBox = $('bannerBox');
-      const connBadge = $('connBadge');
-      const yourTokenInput = $('yourToken');
-      const saveTokenBtn = $('saveTokenBtn');
-      const progressBar = $('progressBar');
-      const etaEl = $('eta');
-      const bkName = $('bkName');
-      const bkAssigned = $('bkAssigned');
-      const bkDt = $('bkDt');
-      const bkDept = $('bkDept');
-      const bkId = $('bkId');
-      const mapBtn = $('mapBtn');
+    const el = {
+      orgName: $('#orgName'),
+      mapLink: $('#mapLink'),
+      banner:  $('#bannerImg'),
+      nowServing: $('#nowServing'),
+      yourToken: $('#yourToken'),
+      progressFill: $('#progressFill'),
+      progressText: $('#progressText'),
+      breakBadge: $('#breakBadge'),
+      serviceStart: $('#serviceStart'),
+      avgService: $('#avgService'),
+      userName: $('#userName'),
+      assignedUser: $('#assignedUser'),
+      department: $('#department'),
+      bookingId: $('#bookingId'),
+      bookingDT: $('#bookingDT'),
+      userPhone: $('#userPhone'),
+    };
 
-      // --- State ---
-      const orgId = clampInt(qs.get('org_id'), 1);
-      const assignedUserId = qs.has('assigned_user_id') ? clampInt(qs.get('assigned_user_id'), 0) : null;
-      let viewerToken = clampInt(qs.get('viewer_token') || localStorage.getItem('eq_viewer_token'), 0);
+    function fmtTime(dtStr){
+      if(!dtStr) return '–';
+      const d = new Date(dtStr);
+      if(isNaN(+d)) return dtStr;
+      const opts = { hour: 'numeric', minute:'2-digit' };
+      return d.toLocaleTimeString([], opts);
+    }
+    function fmtDateTime(dtStr){
+      if(!dtStr) return '–';
+      const d = new Date(dtStr);
+      if(isNaN(+d)) return dtStr;
+      const opts = { year:'numeric', month:'2-digit', day:'2-digit',
+                     hour:'2-digit', minute:'2-digit' };
+      return d.toLocaleString([], opts);
+    }
+    function fmtMinutes(sec){
+      if(!Number.isFinite(sec)) return '–';
+      const m = Math.round(sec/60);
+      return m <= 1 ? '1 minute' : `${m} minutes`;
+    }
 
-      // Show initial IDs
-      orgIdText.textContent = String(orgId);
-      assignedIdText.textContent = assignedUserId === null ? 'All' : String(assignedUserId);
-
-      // Seed input with viewer token if any
-      if (viewerToken > 0) {
-        yourTokenInput.value = String(viewerToken);
-        yourTokenShownEl.textContent = String(viewerToken);
-      }
-
-      // Break ticker
-      let breakUntil = null, breakTicker = null;
-      function updateBreakUI(onBreak, until) {
-        breakUntil = until ? new Date(until) : null;
-        if (onBreak) {
-          breakBadge.style.display = '';
-          startBreakTicker();
-        } else {
-          breakBadge.style.display = 'none';
-          stopBreakTicker();
+    // Normalize server payloads to one shape this UI understands.
+    function normalizeServerShape(raw){
+      // Expected from /status/view:
+      // {
+      //   org: { id, name, map_url, banner_url },
+      //   booking: {
+      //     id, token_no, user_name, user_phone, department,
+      //     assigned_user_id, assigned_user_name, booking_datetime
+      //   },
+      //   metrics: {
+      //     now_serving_token, avg_service_seconds, service_start_at,
+      //     on_break, break_until
+      //   }
+      // }
+      const n = {
+        org: {
+          id: raw?.org?.id ?? orgId,
+          name: raw?.org?.name ?? 'Organization',
+          map_url: raw?.org?.map_url ?? '#',
+          banner_url: raw?.org?.banner_url ?? `/orgs/${orgId}/banner`
+        },
+        booking: {
+          id: raw?.booking?.id ?? null,
+          token_no: raw?.booking?.token_no ?? tokenNo,
+          user_name: raw?.booking?.user_name ?? '',
+          user_phone: raw?.booking?.user_phone ?? '',
+          department: raw?.booking?.department ?? '',
+          assigned_user_id: raw?.booking?.assigned_user_id ?? assignedUserId,
+          assigned_user_name: raw?.booking?.assigned_user_name ?? '',
+          booking_datetime: raw?.booking?.booking_datetime ?? ''
+        },
+        metrics: {
+          now_serving_token: raw?.metrics?.now_serving_token ?? null,
+          avg_service_seconds: raw?.metrics?.avg_service_seconds ?? null,
+          service_start_at: raw?.metrics?.service_start_at ?? null,
+          on_break: !!raw?.metrics?.on_break,
+          break_until: raw?.metrics?.break_until ?? null
         }
-      }
-      function startBreakTicker() {
-        stopBreakTicker();
-        breakTicker = setInterval(() => {
-          if (!breakUntil) { breakCountdownEl.textContent = '—'; return; }
-          const diff = Math.max(0, Math.floor((breakUntil - new Date()) / 1000));
-          const mm = Math.floor(diff / 60).toString().padStart(2,'0');
-          const ss = (diff % 60).toString().padStart(2,'0');
-          breakCountdownEl.textContent = `${mm}:${ss}`;
-        }, 500);
-      }
-      function stopBreakTicker() { if (breakTicker) { clearInterval(breakTicker); breakTicker = null; } }
+      };
+      return n;
+    }
 
-      // Progress + ETA
-      let nowServing = 0, avgServiceSeconds = 0;
-      function computeProgressAndEta() {
-        const v = clampInt(yourTokenInput.value || viewerToken, 0);
-        yourTokenShownEl.textContent = v ? String(v) : '—';
-
-        // progress towards viewer's token
-        let pct = 0;
-        if (v > 0 && nowServing > 0) {
-          pct = Math.max(0, Math.min(100, (nowServing / v) * 100));
-        }
-        progressBar.style.width = pct + '%';
-
-        // ETA
-        if (!v || !nowServing) { etaEl.textContent = '—'; return; }
-        const lag = Math.max(0, v - nowServing);
-        const secs = lag * Math.max(0, avgServiceSeconds || 0);
-        etaEl.textContent = secsHuman(secs);
-      }
-
-      // Save token
-      saveTokenBtn.addEventListener('click', () => {
-        const v = clampInt(yourTokenInput.value, 0);
-        viewerToken = v;
-        if (v > 0) {
-          localStorage.setItem('eq_viewer_token', String(v));
-          const u = new URL(location.href);
-          u.searchParams.set('viewer_token', String(v));
-          history.replaceState({}, '', u.toString());
-        } else {
-          localStorage.removeItem('eq_viewer_token');
-          const u = new URL(location.href);
-          u.searchParams.delete('viewer_token');
-          history.replaceState({}, '', u.toString());
-        }
-        computeProgressAndEta();
-      });
-
-      // Map click: use org.map_url if available, else fall back to name/location search
-      let mapUrlFallback = null;
-      mapBtn.addEventListener('click', () => {
-        const target = mapUrlFallback || mapBtn.dataset.mapHref;
-        if (target) {
-          window.open(target, '_blank', 'noopener,noreferrer');
-        }
-      });
-
-      // SSE
-      if (!orgId) {
-        connBadge.textContent = 'Error: org_id is required in the URL';
-        connBadge.style.borderColor = 'rgba(255,107,107,.35)';
+    function setProgress(nowServing, yourToken){
+      if(!yourToken || yourToken <= 0){
+        el.progressFill.style.width = '0%';
+        el.progressText.textContent = '0% completed';
         return;
       }
+      // crude progress: nowServing / yourToken
+      const ratio = Math.max(0, Math.min(1, (nowServing || 0) / yourToken));
+      const pct = Math.round(ratio*100);
+      el.progressFill.style.width = pct + '%';
+      el.progressText.textContent = pct + '% completed';
+    }
 
-      let es = null, reconnectDelay = 1000;
-      function connect() {
-        connBadge.textContent = 'Connecting…';
-        connBadge.classList.remove('fade');
+    function renderInitial(state){
+      const { org, booking, metrics } = state;
 
-        const params = new URLSearchParams({ org_id: String(orgId) });
-        if (assignedUserId !== null) params.set('assigned_user_id', String(assignedUserId));
-        if (viewerToken > 0) params.set('viewer_token', String(viewerToken));
+      el.orgName.textContent = org.name || 'Organization';
+      el.mapLink.href = org.map_url || '#';
 
-        es = new EventSource(`/live?${params.toString()}`);
+      // Banner: if your backend serves /orgs/:id/banner, we use that by default.
+      el.banner.src = org.banner_url || `/orgs/${orgId}/banner`;
 
-        es.addEventListener('open', () => {
-          connBadge.textContent = 'Live';
-          connBadge.classList.add('fade');
-          reconnectDelay = 1000;
-        });
+      el.yourToken.textContent = booking.token_no ?? '–';
+      el.userName.textContent = booking.user_name || '–';
+      el.userPhone.textContent = booking.user_phone || '–';
+      el.department.textContent = booking.department || '–';
+      el.assignedUser.textContent = booking.assigned_user_name || '–';
+      el.bookingId.textContent = booking.id ?? '–';
+      el.bookingDT.textContent = fmtDateTime(booking.booking_datetime);
 
-        es.addEventListener('error', () => {
-          connBadge.textContent = 'Reconnecting…';
-          es.close();
-          setTimeout(connect, Math.min(reconnectDelay, 15000));
-          reconnectDelay *= 1.6;
-        });
+      el.nowServing.textContent = metrics.now_serving_token ?? '–';
+      el.serviceStart.textContent = fmtTime(metrics.service_start_at);
+      el.avgService.textContent = fmtMinutes(metrics.avg_service_seconds);
 
-        es.addEventListener('ping', () => {
-          lastUpdateEl.textContent = (new Date()).toLocaleString();
-        });
-
-        es.addEventListener('init', (ev) => {
-          const payload = safeParse(ev.data)?.data || {};
-          applySnapshot(payload);
-        });
-
-        es.onmessage = (ev) => {
-          const msg = safeParse(ev.data);
-          if (msg && (msg.type === 'live:update' || msg.data)) {
-            const payload = msg.data || {};
-            applySnapshot(payload);
-          }
-        };
+      // Break badge
+      if(metrics.on_break){
+        const until = metrics.break_until ? fmtTime(metrics.break_until) : '';
+        el.breakBadge.textContent = until ? `On break till ${until}` : 'On break';
+        el.breakBadge.classList.add('on');
+      } else {
+        el.breakBadge.classList.remove('on');
       }
 
-      function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
+      setProgress(metrics.now_serving_token, booking.token_no);
+    }
 
-      function applySnapshot(p) {
-        // Organization
-        if (p.organization?.name) orgNameEl.textContent = p.organization.name;
-        orgIdText.textContent = String(p.org_id || orgId);
-        assignedIdText.textContent = p.assigned_user_id == null ? 'All' : String(p.assigned_user_id);
-
-        // Banner
-        if (p.organization?.banner_url) {
-          banner.src = p.organization.banner_url;
-          banner.style.display = '';
-          if (bannerBox.firstChild && bannerBox.firstChild.nodeType === 3) bannerBox.firstChild.nodeValue = '';
-        }
-
-        // Map link
-        const mapUrl = p.organization?.map_url || null;
-        if (mapUrl) {
-          mapBtn.dataset.mapHref = mapUrl;
-          mapUrlFallback = null;
-        } else {
-          // build a Google Maps search URL using name/location
-          const q = encodeURIComponent([p.organization?.name, p.organization?.location].filter(Boolean).join(' '));
-          mapUrlFallback = q ? `https://www.google.com/maps/search/?api=1&query=${q}` : null;
-        }
-
-        // Metrics
-        nowServing = parseInt(p.now_serving_token || 0, 10) || 0;
-        nowServingEl.textContent = nowServing ? String(nowServing) : '—';
-        serviceStartEl.textContent = p.service_start_at ? formatFull(p.service_start_at) : '—';
-        serviceStartChipEl.textContent = p.service_start_at ? formatDateTime(p.service_start_at) : '—';
-        avgServiceSeconds = parseInt(p.avg_service_seconds || 0, 10) || 0;
-        avgHumanEl.textContent = p.avg_service_time || (avgServiceSeconds ? secsHuman(avgServiceSeconds) : '—');
-        avgHumanChipEl.textContent = p.avg_service_time || (avgServiceSeconds ? secsHuman(avgServiceSeconds) : '—');
-
-        // Break
-        updateBreakUI(!!p.on_break, p.break_until);
-
-        // Booking info (when viewer_token is provided)
-        if (p.booking_info) {
-          bkName.textContent = p.booking_info.name || '—';
-          bkAssigned.textContent = p.booking_info.assigned_user_name || (p.booking_info.assigned_user_id ? `#${p.booking_info.assigned_user_id}` : '—');
-          bkDt.textContent = p.booking_info.booking_datetime ? formatFull(p.booking_info.booking_datetime) : '—';
-          bkDept.textContent = p.booking_info.department || '—';
-          bkId.textContent = p.booking_info.booking_id || '—';
-        } else {
-          // Clear if not provided
-          bkName.textContent = '—';
-          bkAssigned.textContent = '—';
-          bkDt.textContent = '—';
-          bkDept.textContent = '—';
-          bkId.textContent = '—';
-        }
-
-        // Viewer token (from server, if provided)
-        if (p.viewer_token && !yourTokenInput.value) {
-          yourTokenInput.value = String(p.viewer_token);
-          yourTokenShownEl.textContent = String(p.viewer_token);
-        }
-
-        // Update progress + ETA
-        computeProgressAndEta();
-
-        // Timestamps
-        lastUpdateEl.textContent = (new Date()).toLocaleString();
+    function applyLivePatch(patch){
+      // Patch may contain any of: now_serving_token, avg_service_seconds,
+      // service_start_at, on_break, break_until
+      if(patch.now_serving_token !== undefined){
+        el.nowServing.textContent = patch.now_serving_token ?? '–';
+        const yourToken = parseInt(el.yourToken.textContent || '0', 10);
+        setProgress(patch.now_serving_token, yourToken);
       }
+      if(patch.avg_service_seconds !== undefined){
+        el.avgService.textContent = fmtMinutes(patch.avg_service_seconds);
+      }
+      if(patch.service_start_at !== undefined){
+        el.serviceStart.textContent = fmtTime(patch.service_start_at);
+      }
+      if(patch.on_break !== undefined){
+        if(patch.on_break){
+          const until = patch.break_until ? fmtTime(patch.break_until) : '';
+          el.breakBadge.textContent = until ? `On break till ${until}` : 'On break';
+          el.breakBadge.classList.add('on');
+        } else {
+          el.breakBadge.classList.remove('on');
+        }
+      }
+      if(patch.break_until !== undefined && el.breakBadge.classList.contains('on')){
+        const until = patch.break_until ? fmtTime(patch.break_until) : '';
+        el.breakBadge.textContent = until ? `On break till ${until}` : 'On break';
+      }
+    }
 
-      // Start
-      connect();
+    async function loadInitial(){
+      const qs = new URLSearchParams({
+        org_id: orgId,
+        token: tokenNo,
+        assigned_user_id: assignedUserId
+      }).toString();
 
-      // Live recompute as user types
-      yourTokenInput.addEventListener('input', computeProgressAndEta);
+      // If your existing backend uses a different path, update here:
+      const res = await fetch(`/status/view?${qs}`, { credentials:'same-origin' });
+      if(!res.ok){
+        // Fallback: try to at least show banner + org
+        renderInitial(normalizeServerShape({}));
+        return;
+      }
+      const raw = await res.json();
+      const state = normalizeServerShape(raw);
+      renderInitial(state);
+    }
+
+    function startSSE(){
+      const sseQs = new URLSearchParams({
+        org_id: orgId,
+        token: tokenNo,
+        assigned_user_id: assignedUserId
+      }).toString();
+
+      const es = new EventSource(`/live/stream?${sseQs}`);
+      es.addEventListener('message', (ev) => {
+        try{
+          const patch = JSON.parse(ev.data);
+          applyLivePatch(patch);
+        }catch(_){}
+      });
+      es.addEventListener('error', () => {
+        // backoff is handled by browser; page keeps showing last values
+      });
+    }
+
+    (async function boot(){
+      // Guard for missing params
+      if(!orgId || !tokenNo){
+        // Still render the shell and show placeholders
+        renderInitial(normalizeServerShape({}));
+        return;
+      }
+      await loadInitial();
+      startSSE();
     })();
   </script>
 </body>
 </html>
+
