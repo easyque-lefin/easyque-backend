@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>EasyQue – Login</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;background:#f6f7f9}
+    .card{max-width:420px;margin:6vh auto;padding:24px;background:#fff;border-radius:14px;box-shadow:0 4px 20px rgba(0,0,0,.06)}
+    input,button{width:100%;padding:12px;border:1px solid #dadde1;border-radius:10px;margin:8px 0}
+    button{border:0;background:#111;color:#fff;font-weight:600;cursor:pointer}
+    .links a{color:#111;text-decoration:none;margin-right:12px;font-size:14px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Login</h2>
+    <input id="email" placeholder="Email">
+    <input id="password" type="password" placeholder="Password">
+    <button id="btn">Login</button>
+    <div class="links" style="margin-top:8px">
+      <a href="bookings.html">Bookings</a>
+      <a href="org.html">Organization</a>
+      <a href="admin-reviews.html">Reviews (Admin)</a>
+    </div>
+  </div>
+<script>
+const btn = document.getElementById('btn');
+btn.onclick = async () => {
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  const r = await fetch('/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email, password })});
+  const j = await r.json();
+  if (!j.ok) return alert(j.error || 'Login failed');
+  localStorage.setItem('jwt', j.token);
+  localStorage.setItem('me', JSON.stringify(j.user || {}));
+  const role = (j.user && (j.user.role || j.user.user_role)) || '';
+  if (role === 'admin' || role === 'organization_admin' || role === 'org_admin') {
+    location.href = 'org.html';
+  } else {
+    location.href = 'bookings.html';
+  }
+};
+</script>
+</body>
+</html>
