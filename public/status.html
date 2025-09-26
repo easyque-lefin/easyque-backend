@@ -317,7 +317,8 @@
 
     // Banner priority: org_banner_url -> banner_url -> image route fallback
     const fallbackRoute = orgId ? `/orgs/${encodeURIComponent(orgId)}/banner` : '';
-    el.banner.src = org.banner_url || fallbackRoute;
+el.banner.src = org.org_banner_url || org.banner_url || fallbackRoute;
+
 
     el.yourToken.textContent = booking.token_no ?? '–';
     el.userName.textContent = booking.user_name || '–';
@@ -435,5 +436,3 @@
 </script>
 </body>
 </html>
-
-
