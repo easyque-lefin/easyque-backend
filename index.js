@@ -27,7 +27,13 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/public', express.static(path.join(__dirname, 'public')));
 
 /* --------------------------- Health ------------------------------- */
+
 app.get('/health', (_req, res) => res.json({ ok: true }));
+
+/* --------------------------- status ------------------------------- */
+
+app.use('/status', require('./routes/status'));
+
 
 /* -------- helper: require route only if the file actually exists --- */
 function useIfExists(mountPath, relModulePath) {
@@ -103,3 +109,4 @@ app.use((err, _req, res, _next) => {
     process.exit(1);
   }
 })();
+
