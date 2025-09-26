@@ -1,438 +1,159 @@
 <!doctype html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-  <title>EasyQue — Live Queue Status</title>
-
-  <!-- Fonts -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
-
+  <meta charset="utf-8">
+  <title>Live Queue Status</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    :root{
-      --bg:#f7fbff;
-      --card:#ffffff;
-      --ink:#0e2233;
-      --ink-dim:#4a5b6b;
-      --accent:#2ea7ff;
-      --accent-2:#0ad07f;
-      --danger:#ff4d6d;
-      --muted:#e6eef5;
-      --brand:#3ba56c;
-      --pill-start:#3d8bff;
-      --pill-end:#ff3b7a;
-      --shadow: 0 10px 24px rgba(8, 28, 44, .08);
-      --round: 18px;
-      --star:#ffc107;       /* rating gold */
-      --star-off:#e5e7eb;   /* rating off */
-      --pill-blue:#2f66a8;
-    }
-    *{box-sizing:border-box}
-    body{
-      margin:0;
-      background:var(--bg);
-      color:var(--ink);
-      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", sans-serif;
-    }
-    .page{max-width:420px;margin:0 auto;padding-bottom:72px}
-
-    /* Header */
-    .topbar{display:flex;align-items:center;gap:12px;padding:14px 16px}
-    .logo-wrap{display:flex;align-items:center;gap:10px}
-    .logo{width:48px;height:48px;border-radius:12px;display:grid;place-items:center;background:#fff;box-shadow:var(--shadow);overflow:hidden}
-    .logo svg{width:36px;height:36px}
-    .live-tag{font-weight:800;color:var(--brand);letter-spacing:.06em;font-size:12px}
-
-    /* Org pill */
-    .org-pill{
-      margin:8px 16px 0;
-      background:linear-gradient(90deg,var(--pill-start),var(--pill-end));
-      color:#fff;border-radius:14px;padding:12px 16px;
-      display:flex;align-items:center;justify-content:space-between;gap:12px;box-shadow:var(--shadow)
-    }
-    .org-name{font-weight:800;font-size:18px;line-height:1.2}
-    .map-btn{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:10px;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);color:#fff;text-decoration:none}
-    .map-btn svg{width:20px;height:20px}
-
-    /* Banner */
-    .banner-card{margin:14px 16px;background:var(--card);border-radius:var(--round);box-shadow:var(--shadow);padding:12px}
-    .banner{width:100%;height:160px;object-fit:cover;border-radius:12px;background:#eef4f8}
-
-    /* Queue card */
-    .queue-card{margin:14px 16px;background:linear-gradient(180deg,#dff1ff 0%,#eff8ff 100%);border-radius:var(--round);padding:18px 14px 16px;box-shadow:var(--shadow);position:relative}
-    .state-badge{
-      position:absolute;top:-12px;left:50%;transform:translateX(-50%);
-      padding:8px 12px;border-radius:12px;color:#fff;min-width:230px;text-align:center;box-shadow:0 8px 18px rgba(0,0,0,.15);display:none;font-size:12px;font-weight:700
-    }
-    .state-badge.on{display:block}
-    .state-break{background:#6c63ff}
-    .state-wait{background:#f59e0b}
-    .state-live{background:#10b981}
-
-    .qtop{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;margin-top:20px}
-    .q-col{width:46%;background:var(--pill-blue);color:#fff;padding:16px 10px 14px;border-radius:12px;text-align:center}
-    .q-title{font-size:13px;letter-spacing:.02em;opacity:.95;font-weight:600}
-    .q-num{font-weight:800;font-size:44px;line-height:1;margin-top:6px}
-
-    .q-people{width:64px;height:64px;margin:0 auto -12px;background:#0e2233;border-radius:50%;display:grid;place-items:center;color:#fff;box-shadow:0 10px 20px rgba(14,34,51,.35)}
-    .q-people svg{width:36px;height:36px}
-
-    .progress{margin:14px auto 4px;width:76%;height:10px;border-radius:999px;background:#dbe8f2;overflow:hidden;box-shadow:inset 0 1px 2px rgba(0,0,0,.06)}
-    .progress>i{display:block;height:100%;width:0%;background:linear-gradient(90deg,#28dba3,#8ae28a);transition:width .4s ease}
-    .progress-text{text-align:center;font-size:11px;color:var(--ink-dim);margin-top:2px}
-
-    /* Service pill */
-    .service-pill{margin:14px 16px;background:#ffeeda;border-radius:18px;display:flex;overflow:hidden;border:1px solid #ffd7ad}
-    .service-side{width:50%;padding:14px 12px;text-align:center}
-    .service-side+.service-side{border-left:1px dashed #ffbf83;background:#fff5ea}
-    .service-title{color:#ff6f32;font-size:13px;font-weight:700}
-    .service-value{margin-top:6px;font-weight:800;font-size:16px;color:#0e2233}
-
-    /* Booking info */
-    .section-title{margin:18px 16px 6px;font-weight:800;text-align:center}
-    .book-card{margin:6px 16px 10px;background:var(--card);border-radius:var(--round);padding:14px;box-shadow:var(--shadow)}
-    .row{display:flex;gap:10px;margin:6px 0;font-size:14px}
-    .row b{width:46%;color:var(--ink-dim);font-weight:700}
-    .row span{width:54%;font-weight:600;color:#0e2233;word-break:break-word}
-
-    .note{margin:14px 16px 0;color:#5f6f7d;font-size:11.5px;text-align:center}
-
-    /* Rating widget */
-    .rating-card{margin:16px; background:#fff; border-radius:var(--round); box-shadow:var(--shadow); padding:14px}
-    .stars{display:flex;gap:8px;align-items:center;margin-bottom:10px}
-    .star{cursor:pointer;font-size:28px;color:var(--star-off);transition:transform .05s ease}
-    .star.on{color:var(--star)}
-    .star:active{transform:scale(.95)}
-    .review-row{display:flex;gap:8px}
-    .review-row textarea{flex:1;resize:vertical;min-height:70px;border:1px solid #e5e7eb;border-radius:10px;padding:10px;font-family:inherit}
-    .btn{background:var(--brand);color:#fff;border:0;border-radius:10px;padding:10px 14px;font-weight:700;cursor:pointer}
-    .btn:disabled{opacity:.6;cursor:not-allowed}
-    .small{font-size:12px;color:var(--ink-dim);margin-top:6px}
+    :root{--bg:#0a0b0f;--card:#12131a;--muted:#9aa1ac;--accent:#4f8cff}
+    body{margin:0;background:var(--bg);color:#fff;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial}
+    .wrap{max-width:760px;margin:0 auto;padding:16px}
+    .pill{display:inline-flex;gap:8px;align-items:center;background:#1a1c25;border:1px solid #222633;color:#fff;padding:8px 12px;border-radius:999px}
+    .banner{width:100%;height:160px;background:#151823;border:1px solid #232536;border-radius:16px;overflow:hidden;margin:12px 0}
+    .banner img{width:100%;height:100%;object-fit:cover}
+    .card{background:var(--card);border:1px solid #262a36;border-radius:16px;padding:14px;margin:10px 0}
+    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .progress{height:10px;border-radius:999px;background:#1c2030;overflow:hidden}
+    .progress > div{height:100%;width:0%;background:var(--accent);transition:width .5s}
+    .muted{color:var(--muted);font-size:13px}
+    .btn{display:inline-flex;align-items:center;gap:8px;border:1px solid #2a2f3f;background:#141826;color:#fff;padding:10px 12px;border-radius:12px;text-decoration:none}
+    .stars span{font-size:26px;cursor:pointer}
+    .stars .on{filter:drop-shadow(0 0 6px #ffad0d)}
+    .state{padding:4px 10px;border-radius:999px;font-size:12px;border:1px solid #2e3448;background:#141826}
   </style>
 </head>
-
 <body>
-<main class="page" id="page">
+<div class="wrap">
+  <div class="row">
+    <div id="orgName" class="pill">Loading...</div>
+    <a class="btn" id="mapBtn" target="_blank" rel="noopener">Open Map</a>
+    <a class="btn" id="gbtn" style="display:none" target="_blank" rel="noopener">Rate on Google</a>
+  </div>
 
-  <!-- Header -->
-  <div class="topbar">
-    <div class="logo-wrap">
-      <div class="logo" aria-hidden="true">
-        <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-          <rect x="4" y="4" width="56" height="56" rx="12" fill="#eff7ef"/>
-          <path d="M13 34l10 10 28-28" stroke="#24c069" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
-          <circle cx="18" cy="20" r="5" fill="#ff8b2c"/>
-        </svg>
-      </div>
+  <div class="banner" id="banner"><!-- filled by JS --></div>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
       <div>
-        <div style="font-weight:800;">EASYQUE</div>
-        <div class="live-tag">LIVE  QUE  STATUS</div>
+        <div class="muted">Now Serving</div>
+        <div id="nowServing" style="font-size:34px;font-weight:700">—</div>
+      </div>
+      <div style="text-align:right">
+        <div class="muted">Your Token</div>
+        <div id="yourToken" style="font-size:34px;font-weight:700">—</div>
       </div>
     </div>
-  </div>
-
-  <!-- Org pill -->
-  <div class="org-pill">
-    <div class="org-name" id="orgName">Organization</div>
-    <a id="mapLink" class="map-btn" href="#" target="_blank" title="Open location">
-      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C8.7 2 6 4.7 6 8c0 4.5 6 12 6 12s6-7.5 6-12c0-3.3-2.7-6-6-6zm0 8.2c-1.2 0-2.2-1-2.2-2.2S10.8 5.8 12 5.8s2.2 1 2.2 2.2S13.2 10.2 12 10.2z"/></svg>
-    </a>
-  </div>
-
-  <!-- Banner -->
-  <div class="banner-card"><img id="bannerImg" class="banner" alt="Organization banner" src="" /></div>
-
-  <!-- Queue section -->
-  <section class="queue-card">
-    <div id="stateBadge" class="state-badge">Loading…</div>
-    <div class="qtop">
-      <div class="q-col"><div class="q-title">Current Served<br/>Token</div><div class="q-num" id="nowServing">–</div></div>
-      <div class="q-people" aria-hidden="true"><svg viewBox="0 0 24 24"><path fill="white" d="M12 12c2.2 0 4-1.8 4-4S14.2 4 12 4 8 5.8 8 8s1.8 4 4 4zm6 1h-1.3c-.8.4-1.7.7-2.7.7s-1.9-.3-2.7-.7H10c-3.3 0-6 2.7-6 6v1c0 .6.4 1 1 1h18c.6 0 1-.4 1-1v-1c0-3.3-2.7-6-6-6z"/></svg></div>
-      <div class="q-col"><div class="q-title">Your<br/>Token No</div><div class="q-num" id="yourToken">–</div></div>
+    <div class="progress" style="margin-top:12px"><div id="bar"></div></div>
+    <div class="row" style="justify-content:space-between;margin-top:8px">
+      <div class="muted">ETA: <span id="eta">—</span></div>
+      <div class="state" id="state">LIVE</div>
     </div>
-    <div class="progress" aria-label="Queue progress"><i id="progressFill" style="width:0%"></i></div>
-    <div class="progress-text" id="progressText">0% completed</div>
-  </section>
-
-  <!-- Service info -->
-  <div class="service-pill">
-    <div class="service-side"><div class="service-title">Service start time</div><div class="service-value" id="serviceStart">–</div></div>
-    <div class="service-side"><div class="service-title">Avg.Service time till now</div><div class="service-value" id="avgService">–</div></div>
   </div>
 
-  <!-- Booking info -->
-  <div class="section-title">Booking Info</div>
-  <div class="book-card" id="bookCard">
-    <div class="row"><b>Name:</b>              <span id="userName">–</span></div>
-    <div class="row"><b>Assigned User:</b>     <span id="assignedUser">–</span></div>
-    <div class="row"><b>Department:</b>        <span id="department">–</span></div>
-    <div class="row"><b>Booking ID:</b>        <span id="bookingId">–</span></div>
-    <div class="row"><b>Booking Date&Time:</b> <span id="bookingDT">–</span></div>
-    <div class="row"><b>Phone No:</b>          <span id="userPhone">–</span></div>
+  <div class="card">
+    <div class="muted">Booking</div>
+    <div id="binfo">—</div>
   </div>
 
-  <!-- Rating / Review (optional but ready) -->
-  <div class="rating-card" id="ratingCard">
-    <div style="font-weight:800;margin-bottom:8px">Rate your experience</div>
+  <div class="card">
+    <div class="muted">Rate your experience</div>
     <div class="stars" id="stars">
-      <span class="star" data-v="1">★</span>
-      <span class="star" data-v="2">★</span>
-      <span class="star" data-v="3">★</span>
-      <span class="star" data-v="4">★</span>
-      <span class="star" data-v="5">★</span>
-      <span id="starLabel" class="small" style="margin-left:4px"></span>
+      <span data-v="1">★</span><span data-v="2">★</span><span data-v="3">★</span><span data-v="4">★</span><span data-v="5">★</span>
     </div>
-    <div class="review-row">
-      <textarea id="reviewTxt" placeholder="Write a short review (optional)…"></textarea>
-      <button id="reviewBtn" class="btn" disabled>Submit</button>
-    </div>
-    <div class="small">If you rate 4★ or higher and your org has a Google review link, we’ll open it so you can post publicly. All reviews are also saved to EasyQue.</div>
+    <textarea id="revText" placeholder="Write a short review (optional)" style="width:100%;height:80px;margin-top:8px;background:#0f121b;color:#fff;border:1px solid #2a2f3f;border-radius:10px;padding:8px"></textarea>
+    <button class="btn" id="sendRev" style="margin-top:8px">Submit Review</button>
   </div>
-
-  <div class="note">
-    The queue status is only updated when the person you've booked marks the token as served.
-    If your status isn't updating, please contact that person directly.
-  </div>
-</main>
+</div>
 
 <script>
-  // ---------- helpers ----------
-  const $ = s => document.querySelector(s);
-  const params = new URLSearchParams(location.search);
-  const orgId = params.get('org_id');
-  const tokenNo = parseInt(params.get('token') || params.get('viewer_token') || '0', 10) || 0;
-  const assignedUserId = params.get('assigned_user_id');
+const qs = new URLSearchParams(location.search);
+const org_id = qs.get('org_id');
+const booking_id = qs.get('booking_id');
+const token = qs.get('token');
+const phone = qs.get('phone');
 
-  const el = {
-    orgName: $('#orgName'),
-    mapLink: $('#mapLink'),
-    banner:  $('#bannerImg'),
-    nowServing: $('#nowServing'),
-    yourToken: $('#yourToken'),
-    progressFill: $('#progressFill'),
-    progressText: $('#progressText'),
-    stateBadge: $('#stateBadge'),
-    serviceStart: $('#serviceStart'),
-    avgService: $('#avgService'),
-    userName: $('#userName'),
-    assignedUser: $('#assignedUser'),
-    department: $('#department'),
-    bookingId: $('#bookingId'),
-    bookingDT: $('#bookingDT'),
-    userPhone: $('#userPhone'),
-    starsWrap: $('#stars'),
-    starLabel: $('#starLabel'),
-    reviewTxt: $('#reviewTxt'),
-    reviewBtn: $('#reviewBtn'),
-    ratingCard: $('#ratingCard'),
+const el = id => document.getElementById(id);
+
+let last = null;
+let myRating = 0;
+
+[...el('stars').querySelectorAll('span')].forEach(s=>{
+  s.onclick = ()=>{ myRating = Number(s.dataset.v); paintStars(); };
+});
+function paintStars(){
+  [...el('stars').querySelectorAll('span')].forEach(s=>{
+    s.classList.toggle('on', Number(s.dataset.v) <= myRating);
+  });
+}
+
+el('sendRev').onclick = async ()=>{
+  if(!myRating) return alert('Please select rating');
+  const body = {
+    org_id,
+    rating: myRating,
+    review: el('revText').value || null,
+    booking_id: last?.booking?.id || null,
+    assigned_user_id: last?.booking?.assigned_user_id || null
   };
+  const r = await fetch('/reviews', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  const j = await r.json();
+  if(!j.ok) return alert(j.error || 'Failed');
+  alert('Thank you for the review!');
+  myRating = 0; el('revText').value = ''; paintStars();
+};
 
-  function fmtTime(x){
-    if(!x) return '–';
-    const d = new Date(x);
-    if (isNaN(+d)) return x;
-    return d.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
-  }
-  function fmtDateTime(x){
-    if(!x) return '–';
-    const d = new Date(x);
-    if (isNaN(+d)) return x;
-    return d.toLocaleString([], {year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
-  }
-  function fmtMinutes(sec){
-    if(sec == null) return '–';
-    const m = Math.max(0, Math.round(Number(sec)/60));
-    return m <= 1 ? '1 minute' : `${m} minutes`;
-  }
-  function setProgress(nowServing, yourToken){
-    if(!yourToken || yourToken <= 0){
-      el.progressFill.style.width = '0%';
-      el.progressText.textContent = '0% completed';
-      return;
-    }
-    const ratio = Math.max(0, Math.min(1, (nowServing || 0) / yourToken));
-    const pct = Math.round(ratio*100);
-    el.progressFill.style.width = pct + '%';
-    el.progressText.textContent = pct + '% completed';
-  }
+async function load() {
+  const url = new URL('/status/view', location.origin);
+  if (org_id) url.searchParams.set('org_id', org_id);
+  if (booking_id) url.searchParams.set('booking_id', booking_id);
+  if (token) url.searchParams.set('token', token);
+  if (phone) url.searchParams.set('phone', phone);
 
-  // unify server payload
-  function normalize(raw){
-    const n = {
-      org: {
-        id: raw?.org?.id ?? orgId,
-        name: raw?.org?.name ?? 'Organization',
-        map_url: raw?.org?.map_url ?? '#',
-        // accept any of these fields for the banner:
-        banner_url: raw?.org?.org_banner_url ?? raw?.org?.banner_url ?? null,
-        google_review_url: raw?.org?.google_review_url ?? null
-      },
-      booking: {
-        id: raw?.booking?.id ?? null,
-        token_no: raw?.booking?.token_no ?? tokenNo,
-        user_name: raw?.booking?.user_name ?? '',
-        user_phone: raw?.booking?.user_phone ?? '',
-        department: raw?.booking?.department ?? '',
-        assigned_user_id: raw?.booking?.assigned_user_id ?? assignedUserId,
-        assigned_user_name: raw?.booking?.assigned_user_name ?? '',
-        booking_datetime: raw?.booking?.booking_datetime ?? ''
-      },
-      metrics: {
-        now_serving_token: raw?.metrics?.now_serving_token ?? null,
-        avg_service_seconds: raw?.metrics?.avg_service_seconds ?? null,
-        service_start_at: raw?.metrics?.service_start_at ?? null,
-        on_break: !!raw?.metrics?.on_break,
-        break_until: raw?.metrics?.break_until ?? null
-      }
-    };
-    return n;
+  const r = await fetch(url);
+  const j = await r.json();
+  if(!j.ok) { console.error(j); return; }
+  last = j;
+
+  const { org, booking, metrics } = j;
+
+  el('orgName').textContent = org.name || 'Org';
+  el('mapBtn').href = org.map_url || '#';
+  const banner = org.banner;
+  el('banner').innerHTML = banner ? `<img src="${banner}">` : '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:#9aa1ac">No banner</div>';
+
+  if (org.google_review_url) {
+    el('gbtn').href = org.google_review_url; el('gbtn').style.display = 'inline-flex';
   }
 
-  function renderStateRibbon(m){
-    const b = el.stateBadge;
-    b.className = 'state-badge'; // reset
-    b.classList.remove('on');
+  el('nowServing').textContent = metrics?.now_serving_token ?? '—';
+  el('yourToken').textContent = booking?.token_number ?? (token || '—');
+  el('state').textContent = (metrics?.state || 'live').toUpperCase();
 
-    if (m.on_break){
-      b.textContent = m.break_until ? `On break till ${fmtTime(m.break_until)}` : 'On break';
-      b.classList.add('on','state-break');
-      return;
-    }
-    if (!m.service_start_at){
-      b.textContent = 'Service not started yet';
-      b.classList.add('on','state-wait');
-      return;
-    }
-    b.textContent = m.now_serving_token ? `Now serving token ${m.now_serving_token}` : 'Live queue';
-    b.classList.add('on','state-live');
+  const etaSec = metrics?.eta_seconds;
+  if (etaSec != null) {
+    const m = Math.floor(etaSec/60), s = Math.floor(etaSec%60);
+    el('eta').textContent = `${m}m ${s}s`;
+  } else el('eta').textContent = '—';
+
+  const now = Number(metrics?.now_serving_token || 0);
+  const mine = Number(booking?.token_number || token || 0);
+  let pct = 0;
+  if (mine && now) {
+    const ahead = Math.max(0, mine - now);
+    const span = Math.max(1, ahead + 1);
+    pct = Math.max(0, Math.min(100, ((span - ahead) / span) * 100));
   }
+  el('bar').style.width = pct + '%';
 
-  function applyInitial(state){
-    const {org, booking, metrics} = state;
+  el('binfo').innerHTML = booking ? `
+    <div><b>${booking.customer_name || ''}</b> (${booking.customer_phone || ''})</div>
+    <div class="muted">Token #${booking.token_number} • ${booking.status || 'pending'}</div>
+  ` : `<div class="muted">Open queue view</div>`;
+}
 
-    el.orgName.textContent = org.name || 'Organization';
-    el.mapLink.href = org.map_url || '#';
-
-    // Banner priority: org_banner_url -> banner_url -> image route fallback
-    const fallbackRoute = orgId ? `/orgs/${encodeURIComponent(orgId)}/banner` : '';
-el.banner.src = org.org_banner_url || org.banner_url || fallbackRoute;
-
-
-    el.yourToken.textContent = booking.token_no ?? '–';
-    el.userName.textContent = booking.user_name || '–';
-    el.userPhone.textContent = booking.user_phone || '–';
-    el.department.textContent = booking.department || '–';
-    el.assignedUser.textContent = booking.assigned_user_name || '–';
-    el.bookingId.textContent = booking.id ?? '–';
-    el.bookingDT.textContent = fmtDateTime(booking.booking_datetime);
-
-    el.nowServing.textContent = metrics.now_serving_token ?? '–';
-    el.serviceStart.textContent = fmtTime(metrics.service_start_at);
-    el.avgService.textContent = fmtMinutes(metrics.avg_service_seconds);
-
-    renderStateRibbon(metrics);
-    setProgress(metrics.now_serving_token, booking.token_no);
-
-    // keep Google review URL on the rating button for later
-    el.ratingCard.dataset.google = org.google_review_url || '';
-  }
-
-  function patchLive(p){
-    if (p.now_serving_token !== undefined){
-      el.nowServing.textContent = p.now_serving_token ?? '–';
-      const your = parseInt(el.yourToken.textContent || '0', 10);
-      setProgress(p.now_serving_token, your);
-    }
-    if (p.avg_service_seconds !== undefined){
-      el.avgService.textContent = fmtMinutes(p.avg_service_seconds);
-    }
-    if (p.service_start_at !== undefined || p.on_break !== undefined || p.break_until !== undefined){
-      const m = {
-        now_serving_token: el.nowServing.textContent === '–' ? null : Number(el.nowServing.textContent),
-        avg_service_seconds: undefined,
-        service_start_at: (p.service_start_at !== undefined) ? p.service_start_at : undefined,
-        on_break: (p.on_break !== undefined) ? p.on_break : undefined,
-        break_until: (p.break_until !== undefined) ? p.break_until : undefined
-      };
-      renderStateRibbon({
-        now_serving_token: (m.now_serving_token ?? null),
-        avg_service_seconds: null,
-        service_start_at: (p.service_start_at !== undefined) ? p.service_start_at : null,
-        on_break: (p.on_break !== undefined) ? p.on_break : el.stateBadge.classList.contains('state-break'),
-        break_until: (p.break_until !== undefined) ? p.break_until : null
-      });
-    }
-  }
-
-  async function loadInitial(){
-    if (!orgId || !tokenNo){
-      applyInitial(normalize({}));
-      return;
-    }
-    const qs = new URLSearchParams({org_id: orgId, token: tokenNo, assigned_user_id: assignedUserId}).toString();
-    // Your backend should serve this shape from /status/view
-    const r = await fetch(`/status/view?${qs}`, {credentials:'same-origin'});
-    if (!r.ok){
-      applyInitial(normalize({}));
-      return;
-    }
-    const raw = await r.json();
-    applyInitial(normalize(raw));
-  }
-
-  function startSSE(){
-    if (!orgId || !tokenNo) return;
-    const qs = new URLSearchParams({org_id: orgId, token: tokenNo, assigned_user_id: assignedUserId}).toString();
-    const es = new EventSource(`/live/stream?${qs}`);
-    es.addEventListener('message', ev => {
-      try{ patchLive(JSON.parse(ev.data)); }catch(_){}
-    });
-  }
-
-  // ----- rating / review -----
-  let rating = 0;
-  function paintStars(n){
-    [...el.starsWrap.querySelectorAll('.star')].forEach(s => {
-      s.classList.toggle('on', Number(s.dataset.v) <= n);
-    });
-    el.starLabel.textContent = n ? `${n} / 5` : '';
-    el.reviewBtn.disabled = n === 0;
-  }
-  el.starsWrap.addEventListener('click', e => {
-    const v = Number(e.target?.dataset?.v || 0);
-    if (!v) return;
-    rating = v;
-    paintStars(rating);
-  });
-  el.reviewBtn.addEventListener('click', async () => {
-    const payload = {
-      org_id: orgId,
-      token: tokenNo,
-      assigned_user_id: assignedUserId,
-      rating,
-      review: el.reviewTxt.value?.trim() || ''
-    };
-    // Try to POST to /reviews (implement on backend when ready).
-    try{
-      await fetch('/reviews', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
-    }catch(_){}
-    // If 4+ and we have Google review URL, open it.
-    const google = el.ratingCard.dataset.google;
-    if (rating >= 4 && google){
-      window.open(google, '_blank','noopener');
-    }
-    el.reviewBtn.textContent = 'Thanks!';
-    el.reviewBtn.disabled = true;
-  });
-
-  // boot
-  (async function(){
-    await loadInitial();
-    startSSE();
-    paintStars(0);
-  })();
+load();
+// Optional: Basic refresh
+setInterval(load, 15000);
 </script>
 </body>
 </html>
