@@ -1,51 +1,45 @@
 // routes/live.js
-// SSE live stream for organization queue updates and a simple status endpoint to show current queue and banner info
-
 const express = require('express');
-const db = require('../db');
 const router = express.Router();
+const clients = new Map(); // key = `${orgId}:${assignedUserId||0}` -> Set(res)
 
-const clientsByOrg = new Map(); // orgId -> Set(res)
+function key(orgId, assignedUserId) {
+  return `${orgId}:${assignedUserId || 0}`;
+}
 
-function publishOrgUpdate(orgId, payload) {
-  const set = clientsByOrg.get(String(orgId));
+function broadcastToOrgUser(orgId, assignedUserId, payload) {
+  const k = key(orgId, assignedUserId);
+  const set = clients.get(k);
   if (!set) return;
-  const data = JSON.stringify(payload);
+  const data = `data: ${JSON.stringify(payload)}\n\n`;
   for (const res of set) {
-    try {
-      res.write(`data: ${data}\n\n`);
-    } catch (e) {
-      // ignore broken connection
-    }
+    try { res.write(data); } catch {}
   }
 }
 
-/**
- * SSE stream
- * GET /live/stream/:orgId
- */
-router.get('/stream/:orgId', (req, res) => {
-  const orgId = req.params.orgId;
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders && res.flushHeaders();
+router.get('/stream/:orgId/:assignedUserId?', (req, res) => {
+  const orgId = parseInt(req.params.orgId, 10);
+  const assignedUserId = req.params.assignedUserId ? parseInt(req.params.assignedUserId, 10) : null;
 
-  const key = String(orgId);
-  if (!clientsByOrg.has(key)) clientsByOrg.set(key, new Set());
-  clientsByOrg.get(key).add(res);
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  res.flushHeaders();
+  res.write('retry: 1000\n\n');
+
+  const k = key(orgId, assignedUserId);
+  let set = clients.get(k);
+  if (!set) { set = new Set(); clients.set(k, set); }
+  set.add(res);
 
   req.on('close', () => {
-    const s = clientsByOrg.get(key);
-    if (s) {
-      s.delete(res);
-      if (s.size === 0) clientsByOrg.delete(key);
-    }
+    set.delete(res);
+    if (!set.size) clients.delete(k);
   });
 });
 
-/**
- * Helper for other routes to publish
- */
 module.exports = router;
-module.exports.publishOrgUpdate = publishOrgUpdate;
+module.exports.broadcastToOrgUser = broadcastToOrgUser;
+
