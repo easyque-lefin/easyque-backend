@@ -1,0 +1,106 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Organization & Fees</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial;margin:0;background:#f6f7f9}
+    .wrap{max-width:980px;margin:0 auto;padding:16px}
+    .card{background:#fff;border:1px solid #e7ebf0;border-radius:12px;padding:14px;margin:10px 0}
+    input,select,button{padding:10px;border:1px solid #d0d6dd;border-radius:8px}
+    button{background:#111;color:#fff;border:0;cursor:pointer}
+    table{width:100%;border-collapse:collapse;margin-top:8px}
+    th,td{border-bottom:1px solid #eef1f4;padding:8px;text-align:left}
+    th{background:#f4f6f9}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h2>My Organization</h2>
+
+  <div class="card">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input id="orgId" placeholder="org_id">
+      <input id="googleUrl" placeholder="Google review URL">
+      <input type="file" id="orgBanner" accept="image/*">
+      <button id="saveBanner">Upload Banner + Google URL</button>
+    </div>
+    <div id="bannerPreview" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card">
+    <h3>Fee Settings</h3>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input id="feeKey" placeholder="fee key (e.g., option)">
+      <input id="feeVal" placeholder="value">
+      <button id="saveFee">Save</button>
+    </div>
+    <table>
+      <thead><tr><th>Key</th><th>Value</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>Fee Calculator</h3>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select id="mode">
+        <option value="semi">Semi-Auto</option>
+        <option value="full">Full-Auto</option>
+      </select>
+      <input id="expectedUsers" placeholder="Expected users">
+      <input id="expectedBookings" placeholder="Bookings/day">
+      <button id="calc">Calculate</button>
+    </div>
+    <pre id="calcOut"></pre>
+  </div>
+</div>
+<script>
+const el = id => document.getElementById(id);
+
+el('saveBanner').onclick = async ()=>{
+  const orgId = el('orgId').value.trim();
+  if(!orgId) return alert('org_id?');
+  const fd = new FormData();
+  const f = el('orgBanner').files[0];
+  if (f) fd.append('banner', f);
+  const g = el('googleUrl').value.trim();
+  if (g) fd.append('google_review_url', g);
+  const r = await fetch(`/orgs/${orgId}/banner`, { method:'POST', body: fd });
+  const j = await r.json();
+  if(!j.ok) return alert(j.error||'upload failed');
+  el('bannerPreview').innerHTML = j.url ? `<img src="${j.url}" style="height:120px;border-radius:8px">` : '';
+  alert('Saved');
+};
+
+el('saveFee').onclick = async ()=>{
+  const key = el('feeKey').value.trim();
+  const val = el('feeVal').value.trim();
+  if(!key) return alert('fee key required');
+  const r = await fetch('/payments/admin/fees', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ key, value: val }) });
+  const j = await r.json();
+  if(!j.ok) return alert(j.error||'error');
+  loadFees();
+};
+
+async function loadFees(){
+  const r = await fetch('/payments/admin/fees');
+  const j = await r.json();
+  if(!j.ok) return;
+  el('rows').innerHTML = (j.rows||[]).map(x=>`<tr><td>${x.key}</td><td>${x.value}</td></tr>`).join('');
+}
+loadFees();
+
+el('calc').onclick = async ()=>{
+  const r = await fetch('/payments/calc', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ mode: el('mode').value, expected_users: Number(el('expectedUsers').value||0),
+      expected_bookings_per_day: Number(el('expectedBookings').value||0) })
+  });
+  const j = await r.json();
+  el('calcOut').textContent = JSON.stringify(j, null, 2);
+};
+</script>
+</body>
+</html>
