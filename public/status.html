@@ -2,160 +2,474 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Live Queue Status</title>
+  <title>EasyQue — Live Queue Status</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
   <style>
-    :root { --bg:#0b1220; --card:#121a2b; --text:#e6eefc; --muted:#9db0d3; --accent:#4fa3ff; --good:#23d18b; --warn:#ffd166; }
+    :root {
+      --bg: #0b1020;
+      --card: #121933;
+      --muted: #9aa4c7;
+      --text: #e7ecff;
+      --accent: #6ea8ff;
+      --ok: #3ddc84;
+      --warn: #ffd166;
+      --danger: #ff6b6b;
+      --border: #243056;
+      --grad1: #3a7bd5;
+      --grad2: #00d2ff;
+    }
     * { box-sizing: border-box; }
-    body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
-    .container { max-width: 860px; margin: 0 auto; padding: 16px; }
-    .banner { width: 100%; height: 160px; background:#0e1729; border-radius: 16px; overflow:hidden; display:flex; align-items:center; justify-content:center; margin: 12px 0 20px; }
-    .banner img { width:100%; height:100%; object-fit: cover; }
-    .card { background: var(--card); border: 1px solid #1d2a44; border-radius: 16px; padding: 16px; margin-bottom: 16px; }
-    .title { font-size: 18px; color: var(--muted); margin-bottom: 6px; }
-    .value { font-size: 42px; font-weight: 800; letter-spacing: 0.5px; }
-    .row { display:flex; gap: 16px; flex-wrap:wrap; }
-    .col { flex: 1 1 240px; }
-    .org { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-    .org h1 { font-size: 20px; margin:0; }
-    .muted { color: var(--muted); }
-    .pill { display:inline-block; background:#0f223d; border:1px solid #1d3356; border-radius:999px; padding:6px 10px; color:#cfe1ff; font-size:12px; }
-    .footer { text-align:center; color:var(--muted); font-size:12px; margin: 24px 0 8px; }
-    .eta { color: var(--accent); font-weight: 700; }
-    .ok { color: var(--good); }
-    .warn { color: var(--warn); }
+    html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans";
+    }
+    a { color: var(--accent); text-decoration: none; }
+    .container { max-width: 980px; margin: 0 auto; padding: 16px; }
+
+    /* Header */
+    .header { display: grid; grid-template-columns: 96px 1fr; gap: 16px; align-items: center; margin-bottom: 16px; }
+    .banner { width: 96px; height: 96px; border-radius: 12px; background: #0f1730; border: 1px solid var(--border);
+      overflow: hidden; display: grid; place-items: center; font-size: 12px; color: var(--muted); }
+    .banner img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .org-meta { display: grid; gap: 8px; }
+    .org-title {
+      display: inline-flex; align-items: center; gap: 10px;
+      padding: 10px 14px;
+      border-radius: 14px;
+      background: linear-gradient(90deg, var(--grad1), var(--grad2));
+      color: #fff; font-weight: 700; letter-spacing: .2px; font-size: 18px;
+      width: fit-content;
+      box-shadow: 0 6px 18px rgba(0,0,0,.25);
+    }
+    .map-icon {
+      width: 22px; height: 22px; display: inline-flex; cursor: pointer;
+      border-radius: 6px; background: rgba(255,255,255,.18);
+      border: 1px solid rgba(255,255,255,.25);
+      align-items: center; justify-content: center;
+    }
+    .map-icon svg { width: 16px; height: 16px; display: block; }
+    .org-sub { display: flex; gap: 8px; flex-wrap: wrap; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 10px; border: 1px solid var(--border); background: var(--card);
+      border-radius: 999px; font-size: 12px; color: var(--muted);
+    }
+
+    /* Grid */
+    .grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
+    @media (min-width: 720px) { .grid { grid-template-columns: 1fr 1fr; } }
+
+    /* Card */
+    .card { background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent 40%), var(--card);
+      border: 1px solid var(--border); border-radius: 16px; padding: 16px; position: relative; overflow: hidden; }
+    .card h2 { margin: 0 0 12px 0; font-size: 14px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--muted); }
+    .metric { font-size: 56px; font-weight: 700; letter-spacing: 1px; line-height: 1; }
+    .metric.sm { font-size: 36px; }
+    .muted { color: var(--muted); font-size: 12px; }
+
+    /* Status bar + break */
+    .status-bar { margin-top: 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
+    .badge { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--border); background: #1a2448; color: var(--muted); font-size: 12px; }
+    .badge.break { border-color: rgba(255, 107, 107, .35); background: rgba(255, 107, 107, .08); color: #ff9b9b; }
+    .fade { animation: fade .5s ease; }
+    @keyframes fade { from { opacity: .4 } to { opacity: 1 } }
+
+    /* Token cards (like wireframe) */
+    .token-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .token-card {
+      border-radius: 16px; padding: 16px;
+      background: radial-gradient(140% 120% at 100% -20%, rgba(255,255,255,.04), rgba(255,255,255,.01)), var(--card);
+      border: 1px solid var(--border);
+    }
+    .token-card h3 { margin: 0 0 8px 0; color: var(--muted); text-transform: uppercase; font-size: 12px; letter-spacing: 1px; }
+    .token-card .num { font-size: 56px; font-weight: 800; }
+
+    /* Progress bar */
+    .progress { height: 12px; background: rgba(255,255,255,.06); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+    .progress > span { display: block; height: 100%;
+      background: linear-gradient(90deg, #62d26f, #2dc8ff);
+      width: 0%;
+      transition: width .3s ease;
+    }
+
+    /* Inputs */
+    .row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+    label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+    input, button {
+      width: 100%; background: #0c1330; color: var(--text); border: 1px solid var(--border);
+      border-radius: 10px; padding: 10px 12px; font-size: 14px; outline: none;
+    }
+    input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(110,168,255,0.25); }
+    button { cursor: pointer; transition: transform .05s ease; }
+    button:hover { transform: translateY(-1px); }
+    .btn-accent { background: #132450; border-color: #2a4d9c; width: 160px; }
+
+    /* Booking info panel */
+    .info-split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .divider { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: center; margin-top: 10px; }
+    .chip { padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: rgba(255,255,255,.03); font-weight: 600; }
+    .list { display: grid; gap: 8px; }
+    .list .item { display: flex; justify-content: space-between; gap: 12px; padding: 12px; border: 1px dashed var(--border); border-radius: 12px; background: rgba(255,255,255,0.02); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Courier New", monospace; }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="org card">
-      <h1 id="orgName">Live Queue</h1>
-      <span class="pill" id="datePill"></span>
-    </div>
-
-    <div class="banner" id="bannerBox">
-      <!-- banner image injected -->
-    </div>
-
-    <div class="row">
-      <div class="col card">
-        <div class="title">Now Serving</div>
-        <div class="value" id="currentServing">–</div>
-        <div class="muted" id="avgService">Avg service time: –</div>
+    <!-- Header -->
+    <header class="header">
+      <div class="banner" id="bannerBox">Logo<img id="banner" alt="Organization banner" style="display:none" /></div>
+      <div class="org-meta">
+        <div class="org-title" id="orgTitle">
+          <span id="orgName">Organization Name</span>
+          <span class="map-icon" id="mapBtn" title="Open in Google Maps" aria-label="Open map">
+            <!-- Simple location pin icon -->
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s-7-7.33-7-12a7 7 0 1 1 14 0c0 4.67-7 12-7 12z"></path>
+              <circle cx="12" cy="10" r="3"></circle>
+            </svg>
+          </span>
+        </div>
+        <div class="org-sub">
+          <span class="pill">Org ID: <span class="mono" id="orgIdText">—</span></span>
+          <span class="pill">Assigned User: <span class="mono" id="assignedIdText">All</span></span>
+          <span class="pill" title="When this queue started today">Service Start: <span class="mono" id="serviceStart">—</span></span>
+          <span class="pill">Last Update: <span class="mono" id="lastUpdate">—</span></span>
+        </div>
       </div>
-      <div class="col card">
-        <div class="title">Your Token</div>
-        <div class="value" id="yourToken">–</div>
-        <div class="muted">Position in queue: <span id="position">–</span></div>
-      </div>
-      <div class="col card">
-        <div class="title">Estimated Wait</div>
-        <div class="value eta" id="etaValue">–</div>
-        <div class="muted" id="etaDetail">Based on live average</div>
-      </div>
+    </header>
+
+    <!-- Connection / Break / Avg -->
+    <div class="status-bar">
+      <div class="badge break" id="breakBadge" style="display:none;">On Break — resumes in <span id="breakCountdown" class="mono">--:--</span></div>
+      <div class="badge" id="connBadge">Connecting…</div>
+      <div class="badge" id="avgBadge">Avg. Service Time: <span class="mono" id="avgHuman">—</span></div>
     </div>
 
-    <div class="card">
-      <div class="title">Live Updates</div>
-      <div class="muted" id="liveNote">Connected…</div>
-    </div>
+    <!-- Main -->
+    <main class="grid" style="margin-top:16px;">
+      <!-- Left: Now Serving + Your Token + Progress + ETA -->
+      <section class="card">
+        <h2>Live Queue</h2>
 
-    <div class="footer">Powered by EasyQue</div>
+        <div class="token-cards" style="margin-bottom:12px;">
+          <div class="token-card">
+            <h3>Current Served Token</h3>
+            <div class="num" id="nowServing">—</div>
+          </div>
+          <div class="token-card">
+            <h3>Your Token No</h3>
+            <div class="num" id="yourTokenShown">—</div>
+          </div>
+        </div>
+
+        <div class="progress" aria-label="Progress towards your token">
+          <span id="progressBar" style="width:0%;"></span>
+        </div>
+        <div class="muted" style="margin-top:6px;">Progress to your turn</div>
+
+        <div class="row" style="margin-top:14px;">
+          <div style="flex:1 1 160px;">
+            <label for="yourToken">Enter your token</label>
+            <input id="yourToken" type="number" min="1" inputmode="numeric" placeholder="e.g., 25" />
+          </div>
+          <button id="saveTokenBtn" class="btn-accent">Save Token</button>
+        </div>
+
+        <div class="divider">
+          <div class="chip">Service start time: <span class="mono" id="serviceStartChip">—</span></div>
+          <div class="chip">Avg. Service time till now: <span class="mono" id="avgHumanChip">—</span></div>
+        </div>
+
+        <div style="margin-top:12px;">
+          <div class="metric sm" id="eta">—</div>
+          <div class="muted">Expected Wait</div>
+        </div>
+      </section>
+
+      <!-- Right: Booking Info Panel -->
+      <section class="card">
+        <h2>Booking Info</h2>
+        <div class="list">
+          <div class="item"><div>Name</div><div class="mono" id="bkName">—</div></div>
+          <div class="item"><div>Assigned User</div><div class="mono" id="bkAssigned">—</div></div>
+          <div class="item"><div>Booking Date &amp; Time</div><div class="mono" id="bkDt">—</div></div>
+          <div class="item"><div>Department</div><div class="mono" id="bkDept">—</div></div>
+          <div class="item"><div>Booking ID</div><div class="mono" id="bkId">—</div></div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="status-bar" style="margin-bottom:18px;">
+      <span>The queue status updates when the staff marks a token as served. If your status isn’t updating, please contact the organization directly.</span>
+    </footer>
   </div>
 
   <script>
-    function qsel(id){ return document.getElementById(id); }
-    function formatDateISO(dstr){
-      try { const d = new Date(dstr); return d.toLocaleDateString(); } catch { return dstr; }
-    }
-    function secondsToWords(s){
-      if (!s || s <= 0) return '–';
-      const m = Math.floor(s / 60), sec = Math.floor(s % 60);
-      if (m > 60) { const h = Math.floor(m/60), rm = m % 60; return `${h}h ${rm}m`; }
-      return `${m}m ${sec}s`;
-    }
-    function computeETA(yourToken, currentServing, avgSeconds){
-      if (!yourToken || !avgSeconds) return null;
-      const pos = Math.max(0, (yourToken - (currentServing||0)));
-      return { pos, etaSec: pos * avgSeconds };
-    }
+    (function () {
+      // --- Helpers ---
+      const $ = (id) => document.getElementById(id);
+      const qs = new URLSearchParams(location.search);
+      const formatDateTime = (d) => {
+        if (!d) return '—';
+        const dt = (d instanceof Date) ? d : new Date(d);
+        if (Number.isNaN(+dt)) return '—';
+        const opt = { hour: 'numeric', minute: '2-digit' };
+        return dt.toLocaleString(undefined, opt);
+      };
+      const formatFull = (d) => {
+        if (!d) return '—';
+        const dt = (d instanceof Date) ? d : new Date(d);
+        if (Number.isNaN(+dt)) return '—';
+        return dt.toLocaleString();
+      };
+      const secsHuman = (s) => {
+        s = Math.max(0, Math.round(s || 0));
+        if (s < 60) return s + 's';
+        const m = Math.floor(s / 60), r = s % 60;
+        if (m < 60) return r ? `${m}m ${r}s` : `${m}m`;
+        const h = Math.floor(m / 60), mm = m % 60;
+        return mm ? `${h}h ${mm}m` : `${h}h`;
+      };
+      const clampInt = (v, min=0) => {
+        const n = parseInt(v, 10);
+        return Number.isFinite(n) ? Math.max(min, n) : min;
+      };
 
-    async function bootstrap(){
-      // queue_code is last segment of /status/:queue_code
-      const parts = location.pathname.split('/').filter(Boolean);
-      const queue_code = parts[parts.length - 1];
+      // --- Elements ---
+      const orgNameEl = $('orgName');
+      const orgIdText = $('orgIdText');
+      const assignedIdText = $('assignedIdText');
+      const nowServingEl = $('nowServing');
+      const yourTokenShownEl = $('yourTokenShown');
+      const avgHumanEl = $('avgHuman');
+      const avgHumanChipEl = $('avgHumanChip');
+      const serviceStartEl = $('serviceStart');
+      const serviceStartChipEl = $('serviceStartChip');
+      const lastUpdateEl = $('lastUpdate');
+      const breakBadge = $('breakBadge');
+      const breakCountdownEl = $('breakCountdown');
+      const banner = $('banner');
+      const bannerBox = $('bannerBox');
+      const connBadge = $('connBadge');
+      const yourTokenInput = $('yourToken');
+      const saveTokenBtn = $('saveTokenBtn');
+      const progressBar = $('progressBar');
+      const etaEl = $('eta');
+      const bkName = $('bkName');
+      const bkAssigned = $('bkAssigned');
+      const bkDt = $('bkDt');
+      const bkDept = $('bkDept');
+      const bkId = $('bkId');
+      const mapBtn = $('mapBtn');
 
-      const r = await fetch(`/status/api/${queue_code}`);
-      const data = await r.json();
-      if (!data.ok) {
-        qsel('orgName').textContent = 'Invalid or expired link';
-        qsel('liveNote').textContent = 'Could not load status.';
+      // --- State ---
+      const orgId = clampInt(qs.get('org_id'), 1);
+      const assignedUserId = qs.has('assigned_user_id') ? clampInt(qs.get('assigned_user_id'), 0) : null;
+      let viewerToken = clampInt(qs.get('viewer_token') || localStorage.getItem('eq_viewer_token'), 0);
+
+      // Show initial IDs
+      orgIdText.textContent = String(orgId);
+      assignedIdText.textContent = assignedUserId === null ? 'All' : String(assignedUserId);
+
+      // Seed input with viewer token if any
+      if (viewerToken > 0) {
+        yourTokenInput.value = String(viewerToken);
+        yourTokenShownEl.textContent = String(viewerToken);
+      }
+
+      // Break ticker
+      let breakUntil = null, breakTicker = null;
+      function updateBreakUI(onBreak, until) {
+        breakUntil = until ? new Date(until) : null;
+        if (onBreak) {
+          breakBadge.style.display = '';
+          startBreakTicker();
+        } else {
+          breakBadge.style.display = 'none';
+          stopBreakTicker();
+        }
+      }
+      function startBreakTicker() {
+        stopBreakTicker();
+        breakTicker = setInterval(() => {
+          if (!breakUntil) { breakCountdownEl.textContent = '—'; return; }
+          const diff = Math.max(0, Math.floor((breakUntil - new Date()) / 1000));
+          const mm = Math.floor(diff / 60).toString().padStart(2,'0');
+          const ss = (diff % 60).toString().padStart(2,'0');
+          breakCountdownEl.textContent = `${mm}:${ss}`;
+        }, 500);
+      }
+      function stopBreakTicker() { if (breakTicker) { clearInterval(breakTicker); breakTicker = null; } }
+
+      // Progress + ETA
+      let nowServing = 0, avgServiceSeconds = 0;
+      function computeProgressAndEta() {
+        const v = clampInt(yourTokenInput.value || viewerToken, 0);
+        yourTokenShownEl.textContent = v ? String(v) : '—';
+
+        // progress towards viewer's token
+        let pct = 0;
+        if (v > 0 && nowServing > 0) {
+          pct = Math.max(0, Math.min(100, (nowServing / v) * 100));
+        }
+        progressBar.style.width = pct + '%';
+
+        // ETA
+        if (!v || !nowServing) { etaEl.textContent = '—'; return; }
+        const lag = Math.max(0, v - nowServing);
+        const secs = lag * Math.max(0, avgServiceSeconds || 0);
+        etaEl.textContent = secsHuman(secs);
+      }
+
+      // Save token
+      saveTokenBtn.addEventListener('click', () => {
+        const v = clampInt(yourTokenInput.value, 0);
+        viewerToken = v;
+        if (v > 0) {
+          localStorage.setItem('eq_viewer_token', String(v));
+          const u = new URL(location.href);
+          u.searchParams.set('viewer_token', String(v));
+          history.replaceState({}, '', u.toString());
+        } else {
+          localStorage.removeItem('eq_viewer_token');
+          const u = new URL(location.href);
+          u.searchParams.delete('viewer_token');
+          history.replaceState({}, '', u.toString());
+        }
+        computeProgressAndEta();
+      });
+
+      // Map click: use org.map_url if available, else fall back to name/location search
+      let mapUrlFallback = null;
+      mapBtn.addEventListener('click', () => {
+        const target = mapUrlFallback || mapBtn.dataset.mapHref;
+        if (target) {
+          window.open(target, '_blank', 'noopener,noreferrer');
+        }
+      });
+
+      // SSE
+      if (!orgId) {
+        connBadge.textContent = 'Error: org_id is required in the URL';
+        connBadge.style.borderColor = 'rgba(255,107,107,.35)';
         return;
       }
 
-      const { org, booking, now, stream_url } = data;
+      let es = null, reconnectDelay = 1000;
+      function connect() {
+        connBadge.textContent = 'Connecting…';
+        connBadge.classList.remove('fade');
 
-      // UI set
-      qsel('orgName').textContent = org?.name || 'Live Queue';
-      qsel('datePill').textContent = 'Date: ' + formatDateISO(booking.booking_date);
-      qsel('yourToken').textContent = booking.token_no ?? '–';
-      qsel('currentServing').textContent = now.current_served ?? 0;
-      qsel('avgService').textContent = 'Avg service time: ' + (now.avg_seconds ? secondsToWords(now.avg_seconds) : '–');
+        const params = new URLSearchParams({ org_id: String(orgId) });
+        if (assignedUserId !== null) params.set('assigned_user_id', String(assignedUserId));
+        if (viewerToken > 0) params.set('viewer_token', String(viewerToken));
 
-      // banner
-      const banner = org?.banner_url;
-      if (banner) {
-        const img = new Image();
-        img.src = banner.startsWith('http') ? banner : (banner.startsWith('/uploads') ? banner : '/'+banner.replace(/^\/+/,''));
-        img.alt = 'Organization Banner';
-        img.onload = () => {
-          const box = qsel('bannerBox');
-          box.innerHTML = '';
-          box.appendChild(img);
+        es = new EventSource(`/live?${params.toString()}`);
+
+        es.addEventListener('open', () => {
+          connBadge.textContent = 'Live';
+          connBadge.classList.add('fade');
+          reconnectDelay = 1000;
+        });
+
+        es.addEventListener('error', () => {
+          connBadge.textContent = 'Reconnecting…';
+          es.close();
+          setTimeout(connect, Math.min(reconnectDelay, 15000));
+          reconnectDelay *= 1.6;
+        });
+
+        es.addEventListener('ping', () => {
+          lastUpdateEl.textContent = (new Date()).toLocaleString();
+        });
+
+        es.addEventListener('init', (ev) => {
+          const payload = safeParse(ev.data)?.data || {};
+          applySnapshot(payload);
+        });
+
+        es.onmessage = (ev) => {
+          const msg = safeParse(ev.data);
+          if (msg && (msg.type === 'live:update' || msg.data)) {
+            const payload = msg.data || {};
+            applySnapshot(payload);
+          }
         };
       }
 
-      // ETA + position
-      const ei = computeETA(booking.token_no, now.current_served, now.avg_seconds);
-      if (ei) {
-        qsel('position').textContent = ei.pos;
-        qsel('etaValue').textContent = secondsToWords(ei.etaSec);
-        qsel('etaDetail').textContent = ei.pos === 0 ? 'You are next 🎉' : 'Estimated time based on average';
-      } else {
-        qsel('position').textContent = '–';
-        qsel('etaValue').textContent = '–';
+      function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
+
+      function applySnapshot(p) {
+        // Organization
+        if (p.organization?.name) orgNameEl.textContent = p.organization.name;
+        orgIdText.textContent = String(p.org_id || orgId);
+        assignedIdText.textContent = p.assigned_user_id == null ? 'All' : String(p.assigned_user_id);
+
+        // Banner
+        if (p.organization?.banner_url) {
+          banner.src = p.organization.banner_url;
+          banner.style.display = '';
+          if (bannerBox.firstChild && bannerBox.firstChild.nodeType === 3) bannerBox.firstChild.nodeValue = '';
+        }
+
+        // Map link
+        const mapUrl = p.organization?.map_url || null;
+        if (mapUrl) {
+          mapBtn.dataset.mapHref = mapUrl;
+          mapUrlFallback = null;
+        } else {
+          // build a Google Maps search URL using name/location
+          const q = encodeURIComponent([p.organization?.name, p.organization?.location].filter(Boolean).join(' '));
+          mapUrlFallback = q ? `https://www.google.com/maps/search/?api=1&query=${q}` : null;
+        }
+
+        // Metrics
+        nowServing = parseInt(p.now_serving_token || 0, 10) || 0;
+        nowServingEl.textContent = nowServing ? String(nowServing) : '—';
+        serviceStartEl.textContent = p.service_start_at ? formatFull(p.service_start_at) : '—';
+        serviceStartChipEl.textContent = p.service_start_at ? formatDateTime(p.service_start_at) : '—';
+        avgServiceSeconds = parseInt(p.avg_service_seconds || 0, 10) || 0;
+        avgHumanEl.textContent = p.avg_service_time || (avgServiceSeconds ? secsHuman(avgServiceSeconds) : '—');
+        avgHumanChipEl.textContent = p.avg_service_time || (avgServiceSeconds ? secsHuman(avgServiceSeconds) : '—');
+
+        // Break
+        updateBreakUI(!!p.on_break, p.break_until);
+
+        // Booking info (when viewer_token is provided)
+        if (p.booking_info) {
+          bkName.textContent = p.booking_info.name || '—';
+          bkAssigned.textContent = p.booking_info.assigned_user_name || (p.booking_info.assigned_user_id ? `#${p.booking_info.assigned_user_id}` : '—');
+          bkDt.textContent = p.booking_info.booking_datetime ? formatFull(p.booking_info.booking_datetime) : '—';
+          bkDept.textContent = p.booking_info.department || '—';
+          bkId.textContent = p.booking_info.booking_id || '—';
+        } else {
+          // Clear if not provided
+          bkName.textContent = '—';
+          bkAssigned.textContent = '—';
+          bkDt.textContent = '—';
+          bkDept.textContent = '—';
+          bkId.textContent = '—';
+        }
+
+        // Viewer token (from server, if provided)
+        if (p.viewer_token && !yourTokenInput.value) {
+          yourTokenInput.value = String(p.viewer_token);
+          yourTokenShownEl.textContent = String(p.viewer_token);
+        }
+
+        // Update progress + ETA
+        computeProgressAndEta();
+
+        // Timestamps
+        lastUpdateEl.textContent = (new Date()).toLocaleString();
       }
 
-      // SSE
-      try {
-        const es = new EventSource(stream_url);
-        es.onmessage = (e) => {
-          const payload = JSON.parse(e.data || '{}');
-          if (typeof payload.current_served === 'number') {
-            qsel('currentServing').textContent = payload.current_served;
-          }
-          if (typeof payload.avg_seconds === 'number') {
-            qsel('avgService').textContent = 'Avg service time: ' + secondsToWords(payload.avg_seconds);
-          }
-          const upd = computeETA(booking.token_no, payload.current_served ?? now.current_served, payload.avg_seconds ?? now.avg_seconds);
-          if (upd) {
-            qsel('position').textContent = upd.pos;
-            qsel('etaValue').textContent = secondsToWords(upd.etaSec);
-            qsel('etaDetail').textContent = upd.pos === 0 ? 'You are next 🎉' : 'Estimated time based on average';
-          }
-          qsel('liveNote').textContent = 'Live – last update ' + new Date().toLocaleTimeString();
-        };
-        es.onerror = () => {
-          qsel('liveNote').textContent = 'Disconnected from live updates… (will retry automatically)';
-        };
-      } catch (e) {
-        qsel('liveNote').textContent = 'Live updates unavailable on this device.';
-      }
-    }
+      // Start
+      connect();
 
-    bootstrap().catch(() => {
-      qsel('liveNote').textContent = 'Failed to load.';
-    });
+      // Live recompute as user types
+      yourTokenInput.addEventListener('input', computeProgressAndEta);
+    })();
   </script>
 </body>
 </html>
