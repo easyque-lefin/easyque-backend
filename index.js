@@ -69,7 +69,38 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = Number(process.env.PORT || 5008);
+
+const PORT = Number(process.env.PORT || 5008);
+
+// If the port is in use, kill the old process and retry
+server.on('error', async (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\n⚠️ Port ${PORT} is already in use. Trying to free it...`);
+
+    // Windows-specific command to kill process on that port
+    const { exec } = require('child_process');
+    exec(`for /f "tokens=5" %a in ('netstat -ano ^| findstr :${PORT}') do taskkill /F /PID %a`,
+      (error, stdout, stderr) => {
+        if (error) {
+          console.error(`Could not free port ${PORT}:`, error.message);
+          process.exit(1);
+        } else {
+          console.log(`✅ Freed port ${PORT}, restarting...`);
+          setTimeout(() => {
+            server.listen(PORT, () => {
+              console.log(`EasyQue backend running on http://localhost:${PORT}`);
+            });
+          }, 1500);
+        }
+      });
+  } else {
+    console.error('Server error:', err);
+    process.exit(1);
+  }
+});
+
+
+
 server.listen(PORT, () => {
   console.log(`EasyQue backend running on http://localhost:${PORT}`);
 });
-
