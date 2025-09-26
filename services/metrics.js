@@ -1,175 +1,130 @@
 // services/metrics.js
-// Centralized live metrics & break logic (per org OR per assigned user)
+// Live metrics & break logic
 const db = require('../db');
 
-const ASSIGNED = (process.env.ASSIGNED_METRICS || 'false').toLowerCase() === 'true';
-
-// pick base table + key set
-function T(orgId, assignedUserId) {
-  if (ASSIGNED) {
+/**
+ * Get metrics row for org or assigned user.
+ * Uses organizations table for org-level metrics, or assigned_live_metrics for per-doctor metrics.
+ */
+function pickTarget(orgId, assignedUserId) {
+  if (assignedUserId != null) {
     return {
       table: 'assigned_live_metrics',
       where: 'org_id = ? AND assigned_user_id = ?',
-      args: [orgId, assignedUserId || 0],
-      keys: ['org_id','assigned_user_id'],
+      args: [orgId, assignedUserId]
     };
   }
   return {
     table: 'organizations',
     where: 'id = ?',
-    args: [orgId],
-    keys: ['id'],
+    args: [orgId]
   };
 }
 
-// Ensure row exists (for assigned_live_metrics)
-async function ensureRow(orgId, assignedUserId) {
-  const { table, where, args } = T(orgId, assignedUserId);
-  if (table === 'assigned_live_metrics') {
-    const rows = await db.query(`SELECT 1 FROM ${table} WHERE ${where} LIMIT 1`, args);
-    if (!rows.length) {
-      await db.query(
-        `INSERT INTO ${table}
-         (org_id, assigned_user_id, now_serving_token, service_start_at, avg_service_seconds, active_clock_at, break_started_at, break_until, breaking_user_id)
-         VALUES (?, ?, 0, NULL, NULL, NULL, NULL, NULL, NULL)`,
-        [orgId, assignedUserId || 0]
-      );
-    }
+async function ensureAssignedRow(orgId, assignedUserId) {
+  if (assignedUserId == null) return;
+  const rows = await db.query(
+    `SELECT 1 FROM assigned_live_metrics WHERE org_id = ? AND assigned_user_id = ? LIMIT 1`,
+    [orgId, assignedUserId]
+  );
+  if (!rows.length) {
+    await db.query(
+      `INSERT INTO assigned_live_metrics
+         (org_id, assigned_user_id, now_serving_token, avg_service_seconds)
+       VALUES (?, ?, 0, 0)`,
+      [orgId, assignedUserId]
+    );
   }
 }
 
 async function getMetrics(orgId, assignedUserId = null) {
-  const { table, where, args } = T(orgId, assignedUserId);
-  await ensureRow(orgId, assignedUserId);
-  const [row] = await db.query(
-    `SELECT now_serving_token, service_start_at, avg_service_seconds, active_clock_at,
-            break_started_at, break_until, breaking_user_id
-       FROM ${table}
-      WHERE ${where}
-      LIMIT 1`, args
-  );
-  return row || null;
-}
-
-async function updateMetrics(orgId, assignedUserId, patch) {
-  const { table, where, args } = T(orgId, assignedUserId);
-  await ensureRow(orgId, assignedUserId);
-
-  const fields = [];
-  const values = [];
-  for (const [k, v] of Object.entries(patch)) {
-    fields.push(`${k} = ?`);
-    values.push(v);
-  }
-  const sql = `UPDATE ${table} SET ${fields.join(', ')} WHERE ${where}`;
-  await db.query(sql, [...values, ...args]);
-}
-
-function secsHuman(s) {
-  s = Math.max(0, Math.round(s || 0));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  const r = s % 60;
-  if (m < 60) return r ? `${m}m ${r}s` : `${m}m`;
-  const h = Math.floor(m / 60);
-  const mm = m % 60;
-  return mm ? `${h}h ${mm}m` : `${h}h`;
-}
-
-function isBreakActive(m) {
-  if (!m) return false;
-  if (!m.break_started_at) return false;
-  if (!m.break_until) return true;
-  return new Date(m.break_until) > new Date();
+  const t = pickTarget(orgId, assignedUserId);
+  const [row] = await db.query(`SELECT * FROM ${t.table} WHERE ${t.where} LIMIT 1`, t.args);
+  if (!row) return null;
+  return row;
 }
 
 /**
- * Called AFTER a booking is marked served.
- * Updates:
- *  - now_serving_token = tokenNo
- *  - service_start_at = first serve time (if null)
- *  - avg_service_seconds (incremental average by counting served tokens today)
- *  - active_clock_at = now (start timing the next token)
+ * Called when a booking is served. Updates now_serving_token, service_start_at (if first),
+ * and recomputes avg_service_seconds based on today's served bookings.
  */
-async function onServe(orgId, assignedUserId, tokenNo, now = new Date()) {
-  await ensureRow(orgId, assignedUserId);
-  let m = await getMetrics(orgId, assignedUserId);
+async function onServe(orgId, assignedUserId = null) {
+  await ensureAssignedRow(orgId, assignedUserId);
 
-  // If first ever serve: establish start time & initialize clock
-  const patch = { now_serving_token: tokenNo };
-  if (!m.service_start_at) patch.service_start_at = now;
-  // If break is active, we don't accumulate time for this token; the duration will be near-zero.
-  // We still reset active clock for timing the next token.
-  const prevClock = m.active_clock_at ? new Date(m.active_clock_at) : (m.service_start_at ? new Date(m.service_start_at) : now);
-  const secondsForThisToken = isBreakActive(m) ? 0 : Math.max(0, Math.round((now - prevClock) / 1000));
+  // Resolve table
+  const t = pickTarget(orgId, assignedUserId);
 
-  // Count served tokens for scope today (for simple, robust average)
-  const whereScope =
-    assignedUserId != null
-      ? 'org_id = ? AND assigned_user_id = ?'
-      : 'org_id = ? AND assigned_user_id IS NULL';
+  // Compute now_serving as the max served token today in scope
+  const scopeWhere = assignedUserId != null
+    ? `org_id = ? AND assigned_user_id = ?`
+    : `org_id = ? AND assigned_user_id IS NULL`;
+  const scopeArgs = assignedUserId != null ? [orgId, assignedUserId] : [orgId];
 
-  const params =
-    assignedUserId != null ? [orgId, assignedUserId] : [orgId];
-
-  const [cntRow] = await db.query(
-    `SELECT COUNT(*) AS c
+  const [cur] = await db.query(
+    `SELECT COALESCE(MAX(token_no),0) AS now_serving
        FROM bookings
-      WHERE ${whereScope}
-        AND DATE(booking_datetime) = DATE(NOW())
-        AND served_at IS NOT NULL`,
-    params
+      WHERE ${scopeWhere}
+        AND DATE(served_at) = CURRENT_DATE()`,
+    scopeArgs
   );
+  const nowServing = cur?.now_serving || 0;
 
-  const servedCount = cntRow?.c || 1;
-  const prevAvg = m.avg_service_seconds || 0;
-  // Incremental average:
-  // newAvg = ((prevAvg * (servedCount - 1)) + secondsForThisToken) / servedCount
-  const newAvg = ((prevAvg * Math.max(0, servedCount - 1)) + secondsForThisToken) / servedCount;
+  // Start time = first served booking time today (if not already set)
+  const [start] = await db.query(
+    `SELECT MIN(served_at) AS first_served
+       FROM bookings
+      WHERE ${scopeWhere}
+        AND DATE(served_at) = CURRENT_DATE()`,
+    scopeArgs
+  );
+  const serviceStartAt = start?.first_served || null;
 
-  patch.avg_service_seconds = Math.max(0, Math.round(newAvg));
-  patch.active_clock_at = now; // start timing the next token
+  // Average service seconds = avg(booked->served) for today's served tokens (proxy)
+  const [avg] = await db.query(
+    `SELECT ROUND(AVG(TIMESTAMPDIFF(SECOND, booking_datetime, served_at))) AS avg_secs
+       FROM bookings
+      WHERE ${scopeWhere}
+        AND served_at IS NOT NULL
+        AND DATE(served_at) = CURRENT_DATE()`,
+    scopeArgs
+  );
+  const avgSecs = avg?.avg_secs || 0;
 
-  await updateMetrics(orgId, assignedUserId, patch);
-  m = await getMetrics(orgId, assignedUserId);
+  // Update metrics row
+  const cols = ['now_serving_token = ?','avg_service_seconds = ?'];
+  const params = [nowServing, avgSecs];
 
-  return {
-    ...m,
-    avg_service_time_human: secsHuman(m.avg_service_seconds || 0)
-  };
+  if (serviceStartAt) {
+    cols.push('service_start_at = IFNULL(service_start_at, ?)');
+    params.push(serviceStartAt);
+  }
+
+  await db.query(
+    `UPDATE ${t.table}
+        SET ${cols.join(', ')}
+      WHERE ${t.where}`,
+    [...params, ...t.args]
+  );
 }
 
-async function startBreak(orgId, assignedUserId, breakingUserId, untilTs) {
-  await updateMetrics(orgId, assignedUserId, {
-    break_started_at: new Date(),
-    break_until: untilTs ? new Date(untilTs) : null,
-    breaking_user_id: breakingUserId || null
-  });
+/** ETA helper */
+function etaFor(viewerToken, nowServing, avgSeconds) {
+  const pos = Math.max(0, (viewerToken || 0) - (nowServing || 0));
+  return pos * (avgSeconds || 0);
 }
 
-async function endBreak(orgId, assignedUserId) {
-  await updateMetrics(orgId, assignedUserId, {
-    break_started_at: null,
-    break_until: null,
-    breaking_user_id: null,
-    active_clock_at: new Date() // resume clock from now
-  });
-}
-
-function etaFor(viewerToken, nowServingToken, avgSec) {
-  const lag = Math.max(0, (parseInt(viewerToken || 0, 10) - parseInt(nowServingToken || 0, 10)));
-  const s = lag * Math.max(0, avgSec || 0);
-  return secsHuman(s);
+/** Pretty seconds */
+function secsHuman(s) {
+  s = s || 0;
+  const m = Math.floor(s/60), sec = s%60;
+  if (m <= 0) return `${sec}s`;
+  return `${m}m ${sec}s`;
 }
 
 module.exports = {
   getMetrics,
-  updateMetrics,
   onServe,
-  startBreak,
-  endBreak,
   etaFor,
-  secsHuman,
-  ASSIGNED
+  secsHuman
 };
 
