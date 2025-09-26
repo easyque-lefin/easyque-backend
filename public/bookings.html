@@ -1,0 +1,114 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Bookings</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial;margin:0;background:#fafbfc}
+    .wrap{max-width:1100px;margin:0 auto;padding:16px}
+    input,select,button{padding:8px;border:1px solid #d0d6dd;border-radius:8px}
+    button{background:#111;color:#fff;border:0;cursor:pointer}
+    table{width:100%;border-collapse:collapse;margin-top:12px}
+    th,td{border-bottom:1px solid #e7ebf0;padding:8px;text-align:left;font-size:14px}
+    th{background:#f2f5f8}
+    .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h2>Bookings</h2>
+
+  <div class="card row" style="margin-bottom:8px">
+    <input id="org" placeholder="org_id">
+    <input id="name" placeholder="customer name">
+    <input id="phone" placeholder="phone">
+    <input id="when" type="datetime-local">
+    <input id="assignee" placeholder="assigned_user_id">
+    <button id="create">Create</button>
+    <button id="reload">Reload</button>
+  </div>
+
+  <div class="card row" style="margin-bottom:8px">
+    <b>My Break:</b>
+    <input id="meOrg" placeholder="org_id">
+    <input id="meUser" placeholder="my user_id">
+    <select id="mins"><option>15</option><option>30</option><option>45</option><option>60</option></select>
+    <button id="startB">Start Break</button>
+    <button id="endB">End Break</button>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>ID</th><th>Token</th><th>Name</th><th>Phone</th><th>Status</th><th>Assignee</th></tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+</div>
+<script>
+const el = id => document.getElementById(id);
+
+el('create').onclick = async ()=>{
+  const r = await fetch('/bookings', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      org_id: el('org').value.trim(),
+      customer_name: el('name').value.trim(),
+      customer_phone: el('phone').value.trim(),
+      when: el('when').value || null,
+      assigned_user_id: el('assignee').value.trim() || null
+    })
+  });
+  const j = await r.json();
+  if(!j.ok) return alert(j.error||'failed');
+  el('when').value = ''; el('name').value=''; el('phone').value='';
+  load();
+};
+
+el('reload').onclick = load;
+
+async function load(){
+  const url = new URL('/bookings', location.origin);
+  const org = el('org').value.trim();
+  if(org) url.searchParams.set('org_id', org);
+  const r = await fetch(url);
+  const j = await r.json();
+  if(!j.ok) return;
+  el('rows').innerHTML = (j.rows||[]).map(x=>`
+    <tr>
+      <td>${x.id}</td>
+      <td>${x.token_number}</td>
+      <td>${(x.customer_name||'').replace(/</g,'&lt;')}</td>
+      <td>${x.customer_phone||''}</td>
+      <td>${x.status||''}</td>
+      <td>${x.assigned_user_id||''}</td>
+    </tr>
+  `).join('');
+}
+load();
+
+// Break controls
+el('startB').onclick = async ()=>{
+  const orgId = el('meOrg').value.trim();
+  const userId = el('meUser').value.trim();
+  const minutes = Number(el('mins').value);
+  if(!orgId || !userId) return alert('org_id & my user_id required');
+  const r = await fetch(`/orgs/${orgId}/break/start`, { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ user_id: userId, minutes }) });
+  const j = await r.json();
+  if(!j.ok) return alert(j.error||'failed');
+  alert('Break started');
+};
+el('endB').onclick = async ()=>{
+  const orgId = el('meOrg').value.trim();
+  const userId = el('meUser').value.trim();
+  if(!orgId || !userId) return alert('org_id & my user_id required');
+  const r = await fetch(`/orgs/${orgId}/break/end`, { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ user_id: userId }) });
+  const j = await r.json();
+  if(!j.ok) return alert(j.error||'failed');
+  alert('Break ended');
+};
+</script>
+</body>
+</html>
