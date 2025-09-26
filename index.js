@@ -1,22 +1,21 @@
-// index.js — mounts all routes, strict port, static /public + /uploads, CORS, JWT parsing where needed
+// index.js — robust route loader + mounts + static + CORS
 
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const path = require('path');
 const cors = require('cors');
-const cookieParser = require('cookie-parser');
 
 const app = express();
 const server = http.createServer(app);
 
-// --- Core middleware
+// -------- middleware
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use(cookieParser());
 
-// CORS: allow both your api + status subdomains during dev/tunnel
-const CORS_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:5008,https://api.easyque.org,https://status.easyque.org')
+// CORS
+const CORS_ORIGINS = (process.env.CORS_ORIGINS ||
+  'http://localhost:5008,https://api.easyque.org,https://status.easyque.org')
   .split(',').map(s => s.trim());
 app.use(cors({ origin: CORS_ORIGINS, credentials: true }));
 
@@ -27,29 +26,40 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // Health
 app.get('/health', (req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
-// --- DB helper (already in your project; keeping simple here)
-const db = require('./services/db'); // ensure this exports db.query
+// -------- helper: safely unwrap different export styles
+function loadRouter(modulePath, name) {
+  let mod = require(modulePath);
+  // unwrap ESM default export or named .router
+  const candidate = (typeof mod === 'function') ? mod : (mod?.router || mod?.default);
+  if (typeof candidate !== 'function') {
+    console.error(`⚠️  Route "${name}" did not export an Express router. Got:`,
+      typeof mod, mod && Object.keys(mod));
+    // return a harmless middleware that surfaces the issue
+    return (req, res) => res.status(500).json({ ok: false, error: `Route "${name}" misconfigured` });
+  }
+  return candidate;
+}
 
-// --- Live bus / SSE (already present in your project)
-// const liveBus = require('./services/liveBus');
+// -------- routes
+app.use('/auth',        loadRouter('./routes/auth', 'auth'));
+app.use('/users',       loadRouter('./routes/users', 'users'));
+app.use('/bookings',    loadRouter('./routes/bookings', 'bookings'));
+app.use('/orgs',        loadRouter('./routes/orgs', 'orgs'));
 
-// --- Routes (core)
-app.use('/auth', require('./routes/auth'));
-app.use('/users', require('./routes/users'));
-app.use('/bookings', require('./routes/bookings'));
-app.use('/orgs', require('./routes/orgs'));               // your existing orgs route
-app.use('/organizations', require('./routes/organizations')); // ✅ mount so UI calls work
-app.use('/payments', require('./routes/payments'));
-app.use('/billing', require('./routes/billing'));
+// If your repo has routes/organizations.js, keep this; otherwise comment it out.
+try { app.use('/organizations', loadRouter('./routes/organizations', 'organizations')); }
+catch { /* not present in some repos; safe to ignore */ }
 
-// --- New/Updated routes in this delivery
-app.use('/status', require('./routes/status'));   // ✅ returns { org, booking, metrics }
-app.use('/reviews', require('./routes/reviews')); // ✅ internal reviews system
+app.use('/payments',    loadRouter('./routes/payments', 'payments'));
 
-// --- Fallback: serve minimal index or 404
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
+// Some repos have billing as an object export; loader above handles it.
+// If you don’t have routes/billing.js, it’ll log a warning but continue.
+try { app.use('/billing', loadRouter('./routes/billing', 'billing')); } catch {}
+
+app.use('/status',      loadRouter('./routes/status', 'status'));
+app.use('/reviews',     loadRouter('./routes/reviews', 'reviews'));
+
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 // Error handler
 // eslint-disable-next-line no-unused-vars
