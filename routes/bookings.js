@@ -1,41 +1,45 @@
 const express = require('express');
 const dayjs = require('dayjs');
-const db = require('../services/db'); // uses mysql2/promise pool
+const db = require('../services/db'); // mysql2/promise pool
 const router = express.Router();
 
 const APP_URL = process.env.APP_URL || 'http://localhost:5008';
-const LIVE_BASE_URL = process.env.LIVE_BASE_URL || `${APP_URL}/public/status.html`;
+const LIVE_BASE_URL =
+  process.env.LIVE_BASE_URL && process.env.LIVE_BASE_URL.startsWith('http')
+    ? process.env.LIVE_BASE_URL
+    : `${APP_URL}/public/status.html`;
 
-/* --------------------------- helpers --------------------------- */
+/* ------------------------------------------------------------------ */
+/* Helpers                                                            */
+/* ------------------------------------------------------------------ */
 
 async function getTableColumns(table) {
   const [rows] = await db.query(
-    'SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?',
+    `SELECT COLUMN_NAME
+       FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
     [table]
   );
   return new Set(rows.map(r => r.COLUMN_NAME));
 }
 
 function pickColumn(cols, preferred, fallback) {
-  if (cols.has(preferred)) return preferred;
+  if (preferred && cols.has(preferred)) return preferred;
   if (fallback && cols.has(fallback)) return fallback;
   return null;
 }
 
-function safeNumber(x, def = 0) {
+function num(x, d = 0) {
   const n = Number(x);
-  return Number.isFinite(n) ? n : def;
+  return Number.isFinite(n) ? n : d;
 }
 
 function buildStatusLink(org_id, booking_id) {
-  // LIVE_BASE_URL can be https://status.easyque.org or a local file url
-  const base = LIVE_BASE_URL.includes('http') ? LIVE_BASE_URL : `${APP_URL}/public/status.html`;
-  const sep = base.includes('?') ? '&' : '?';
-  return `${base}${sep}org_id=${encodeURIComponent(org_id)}&booking_id=${encodeURIComponent(booking_id)}`;
+  const sep = LIVE_BASE_URL.includes('?') ? '&' : '?';
+  return `${LIVE_BASE_URL}${sep}org_id=${encodeURIComponent(org_id)}&booking_id=${encodeURIComponent(booking_id)}`;
 }
 
 function buildMessagingLinks(phone, statusLink) {
-  // normalize to digits only, allow country code without '+'
   const digits = String(phone || '').replace(/[^\d]/g, '');
   const msg = `Hi! Your EasyQue live status link: ${statusLink}`;
   const enc = encodeURIComponent(msg);
@@ -45,66 +49,88 @@ function buildMessagingLinks(phone, statusLink) {
   };
 }
 
-/* --------------------- token generation (TX) -------------------- */
-
+/* Token generation: per org × assigned_user × day (transaction safe) */
 async function nextTokenForDay(conn, tableCols, org_id, assigned_user_id, booking_date) {
   const tokenCol = pickColumn(tableCols, 'token_number', 'token_no');
   if (!tokenCol) throw new Error('Token column not found (token_number or token_no)');
-
-  // Lock the scope rowset to avoid races
   const [rows] = await conn.query(
     `SELECT COALESCE(MAX(${tokenCol}),0) AS max_tok
-     FROM bookings
-     WHERE org_id = ? AND assigned_user_id = ? AND booking_date = ?
-     FOR UPDATE`,
+       FROM bookings
+      WHERE org_id = ? AND assigned_user_id = ? AND booking_date = ?
+      FOR UPDATE`,
     [org_id, assigned_user_id, booking_date]
   );
-  return safeNumber(rows[0]?.max_tok, 0) + 1;
+  return num(rows[0]?.max_tok, 0) + 1;
 }
 
-/* ---------------------------- create ---------------------------- */
-/**
- * Body:
- *  {
- *    org_id, user_name, user_phone, user_alt_phone?, user_email?, place?,
- *    department?, assigned_user_id,
- *    when? (ISO datetime string or null), query_issue?
- *  }
- */
+/* ------------------------------------------------------------------ */
+/* Create booking                                                      */
+/* Body:
+{
+  "org_id": 1,
+  "user_name": "Raju",
+  "user_phone": "918281235929",
+  "user_alt_phone": null,
+  "user_email": null,
+  "place": "Wayanad",
+  "department": "General",
+  "assigned_user_id": 5,
+  "when": null,                       // optional ISO datetime
+  "query_issue": "Fever"
+}
+*/
+/* ------------------------------------------------------------------ */
 router.post('/', async (req, res, next) => {
   const body = req.body || {};
-  const org_id = safeNumber(body.org_id);
-  const assigned_user_id = safeNumber(body.assigned_user_id, 0);
+  const org_id = num(body.org_id);
+  const assigned_user_id = num(body.assigned_user_id, 0);
 
   if (!org_id || !body.user_name || !body.user_phone) {
     return res.status(400).json({ ok: false, error: 'org_id, user_name and user_phone are required' });
   }
 
   const booking_date = dayjs().format('YYYY-MM-DD');
-  const scheduled_at = body.when ? dayjs(body.when).isValid() ? dayjs(body.when).format('YYYY-MM-DD HH:mm:ss') : null : null;
+  const scheduled_at =
+    body.when && dayjs(body.when).isValid()
+      ? dayjs(body.when).format('YYYY-MM-DD HH:mm:ss')
+      : null;
 
   const conn = await db.getConnection();
   try {
     const cols = await getTableColumns('bookings');
-    const tokenCol = pickColumn(cols, 'token_number', 'token_no');
+
+    // token columns (support both)
+    const tokenCols = [];
+    if (cols.has('token_number')) tokenCols.push('token_number');
+    if (cols.has('token_no')) tokenCols.push('token_no');
+
+    // key cols presence checks
+    if (!cols.has('booking_date')) {
+      throw new Error('bookings.booking_date column is required in DB');
+    }
+    if (tokenCols.length === 0) {
+      throw new Error('bookings token column is required (token_number or token_no)');
+    }
+
     const schedCol = pickColumn(cols, 'scheduled_at', 'booking_datetime');
     const statusCol = cols.has('status') ? 'status' : null;
     const queryIssueCol = cols.has('query_issue') ? 'query_issue' : null;
     const createdAtCol = cols.has('created_at') ? 'created_at' : null;
-
-    if (!cols.has('booking_date')) {
-      throw new Error('bookings.booking_date column is required. Please run the migration to add it.');
-    }
-    if (!tokenCol) {
-      throw new Error('bookings token column is required (token_number or token_no). Please run the migration.');
-    }
+    const bookingNumberCol = cols.has('booking_number') ? 'booking_number' : null;
 
     await conn.beginTransaction();
 
-    const token_number = await nextTokenForDay(conn, cols, org_id, assigned_user_id, booking_date);
+    // compute token
+    const token_value = await nextTokenForDay(conn, cols, org_id, assigned_user_id, booking_date);
 
-    // Build column list dynamically based on what exists
-    const names = [
+    // readable booking number if column exists
+    const booking_number =
+      bookingNumberCol
+        ? `${dayjs(booking_date).format('YYYYMMDD')}-${assigned_user_id}-${token_value}`
+        : null;
+
+    // dynamic column list (only what exists)
+    const colNames = [
       'org_id',
       'user_name',
       'user_phone',
@@ -115,7 +141,8 @@ router.post('/', async (req, res, next) => {
       'assigned_user_id',
       'booking_date',
       schedCol,
-      tokenCol,
+      ...tokenCols,                // write same token value to each existing token column
+      bookingNumberCol,
       statusCol,
       queryIssueCol,
       createdAtCol
@@ -132,35 +159,29 @@ router.post('/', async (req, res, next) => {
       assigned_user_id,
       booking_date,
       schedCol ? (scheduled_at || null) : undefined,
-      token_number,
+      ...tokenCols.map(() => token_value),
+      bookingNumberCol ? booking_number : undefined,
       statusCol ? 'pending' : undefined,
       queryIssueCol ? (body.query_issue || null) : undefined,
-      createdAtCol ? null : undefined, // will use NOW() if we put it in SQL
+      createdAtCol ? null : undefined // will swap to NOW() in the SQL text
     ].filter(v => v !== undefined);
 
-    // Prepare placeholders
-    const qMarks = names.map(() => '?').join(', ');
+    // placeholders
+    const placeholders = colNames.map(() => '?');
+    let sql = `INSERT INTO bookings (${colNames.join(', ')}) VALUES (${placeholders.join(', ')})`;
 
-    // If created_at exists, use NOW() directly instead of binding (to avoid timezone differences)
-    const namesSql = names.map(n => (n === createdAtCol ? n : n)).join(', ');
-    const sql = `INSERT INTO bookings (${namesSql}) VALUES (${qMarks})`;
-
-    // For created_at bound value, we passed null above; adjust to NOW() by editing sql if needed.
-    let finalSql = sql;
-    let finalValues = [...values];
+    // If created_at exists, replace its placeholder with NOW()
     if (createdAtCol) {
-      // Replace the last ? (which corresponds to created_at) with NOW()
-      const idx = names.lastIndexOf(createdAtCol);
-      // rebuild with NOW()
-      const parts = qMarks.split(', ');
-      parts[idx] = 'NOW()';
-      finalSql = `INSERT INTO bookings (${namesSql}) VALUES (${parts.join(', ')})`;
-      // remove the placeholder value for created_at (we added null)
-      finalValues = values.filter((_, i) => i !== idx);
+      const idx = colNames.lastIndexOf(createdAtCol);
+      placeholders[idx] = 'NOW()';
+      sql = `INSERT INTO bookings (${colNames.join(', ')}) VALUES (${placeholders.join(', ')})`;
+      // remove created_at value (we added null above)
+      const createdIdx = values.findIndex(v => v === null);
+      if (createdIdx !== -1) values.splice(createdIdx, 1);
     }
 
-    const [result] = await conn.query(finalSql, finalValues);
-    const booking_id = result.insertId;
+    const [r] = await conn.query(sql, values);
+    const booking_id = r.insertId;
 
     await conn.commit();
 
@@ -178,26 +199,30 @@ router.post('/', async (req, res, next) => {
         user_phone: body.user_phone,
         assigned_user_id,
         booking_date,
-        [tokenCol]: token_number
+        ...(tokenCols.includes('token_number') ? { token_number: token_value } : {}),
+        ...(tokenCols.includes('token_no') ? { token_no: token_value } : {}),
+        ...(bookingNumberCol ? { booking_number } : {})
       }
     });
-  } catch (e) {
+  } catch (err) {
     try { await conn.rollback(); } catch {}
-    next(e);
+    next(err);
   } finally {
     conn.release();
   }
 });
 
-/* ----------------------------- list ----------------------------- */
-// GET /bookings?org_id=1&date=YYYY-MM-DD&assigned_user_id=5&department=Cardio
+/* ------------------------------------------------------------------ */
+/* List bookings (today by default)                                    */
+/* GET /bookings?org_id=1&date=YYYY-MM-DD&assigned_user_id=5&department=Cardio */
+/* ------------------------------------------------------------------ */
 router.get('/', async (req, res, next) => {
   try {
-    const org_id = safeNumber(req.query.org_id);
+    const org_id = num(req.query.org_id);
     if (!org_id) return res.status(400).json({ ok: false, error: 'org_id required' });
 
     const date = req.query.date || dayjs().format('YYYY-MM-DD');
-    const assigned_user_id = req.query.assigned_user_id ? safeNumber(req.query.assigned_user_id) : null;
+    const assigned_user_id = req.query.assigned_user_id ? num(req.query.assigned_user_id) : null;
     const department = req.query.department || null;
 
     const cols = await getTableColumns('bookings');
@@ -206,6 +231,7 @@ router.get('/', async (req, res, next) => {
     let sql = `SELECT id, org_id, user_name, user_phone,
                ${cols.has('department') ? 'department,' : ''} assigned_user_id, booking_date,
                ${tokenCol ? tokenCol + ',' : ''} 
+               ${cols.has('booking_number') ? 'booking_number,' : ''}
                ${cols.has('status') ? 'status,' : ''} 
                ${cols.has('query_issue') ? 'query_issue,' : ''} 
                ${cols.has('created_at') ? 'created_at' : 'NOW() AS created_at'}
@@ -221,35 +247,37 @@ router.get('/', async (req, res, next) => {
       sql += ' AND department = ?';
       params.push(department);
     }
-    sql += ` ORDER BY ${tokenCol ? tokenCol : 'id'} ASC`;
+    sql += ` ORDER BY ${tokenCol || 'id'} ASC`;
 
     const [rows] = await db.query(sql, params);
     res.json({ ok: true, rows });
-  } catch (e) { next(e); }
+  } catch (err) { next(err); }
 });
 
-/* ------------------------- booking details ---------------------- */
+/* ------------------------------------------------------------------ */
+/* Booking details                                                     */
+/* ------------------------------------------------------------------ */
 router.get('/:id', async (req, res, next) => {
   try {
-    const id = safeNumber(req.params.id);
+    const id = num(req.params.id);
     const [rows] = await db.query('SELECT * FROM bookings WHERE id = ?', [id]);
     if (!rows.length) return res.status(404).json({ ok: false, error: 'Not found' });
     res.json({ ok: true, booking: rows[0] });
-  } catch (e) { next(e); }
+  } catch (err) { next(err); }
 });
 
-/* ----------------------------- serve ---------------------------- */
+/* ------------------------------------------------------------------ */
+/* Serve booking                                                       */
+/* ------------------------------------------------------------------ */
 router.post('/:id/serve', async (req, res, next) => {
   const conn = await db.getConnection();
   try {
-    const id = safeNumber(req.params.id);
+    const id = num(req.params.id);
     const cols = await getTableColumns('bookings');
-    if (!cols.has('status')) {
-      // If no status column, just respond OK (legacy schema).
-      return res.json({ ok: true, served: true });
-    }
+    const tokenCol = pickColumn(cols, 'token_number', 'token_no');
 
     await conn.beginTransaction();
+
     const [rows] = await conn.query('SELECT * FROM bookings WHERE id = ? FOR UPDATE', [id]);
     if (!rows.length) {
       await conn.rollback();
@@ -257,81 +285,80 @@ router.post('/:id/serve', async (req, res, next) => {
     }
     const b = rows[0];
 
-    await conn.query('UPDATE bookings SET status = ? WHERE id = ?', ['served', id]);
+    if (cols.has('status')) {
+      await conn.query('UPDATE bookings SET status = ? WHERE id = ?', ['served', id]);
+    }
 
-    // Update live metrics if that table exists
+    // Update assigned_live_metrics if table exists
     const mcols = await getTableColumns('assigned_live_metrics');
-    if (mcols.size) {
-      const nowServingCol = mcols.has('now_serving_token') ? 'now_serving_token' : null;
-      const avgCol = mcols.has('avg_service_seconds') ? 'avg_service_seconds' : null;
-      const booking_date = b.booking_date;
-      const tokenCol = pickColumn(cols, 'token_number', 'token_no');
+    if (mcols.size && mcols.has('now_serving_token') && tokenCol && b.booking_date) {
+      // upsert now serving
+      await conn.query(
+        `INSERT INTO assigned_live_metrics (org_id, assigned_user_id, booking_date, now_serving_token, updated_at)
+         VALUES (?, ?, ?, ?, NOW())
+         ON DUPLICATE KEY UPDATE now_serving_token = VALUES(now_serving_token), updated_at = NOW()`,
+        [b.org_id, b.assigned_user_id, b.booking_date, b[tokenCol]]
+      );
 
-      if (nowServingCol && booking_date && tokenCol) {
-        // upsert metrics row
-        await conn.query(
-          `INSERT INTO assigned_live_metrics (org_id, assigned_user_id, booking_date, ${nowServingCol}, updated_at)
-           VALUES (?, ?, ?, ?, NOW())
-           ON DUPLICATE KEY UPDATE ${nowServingCol} = VALUES(${nowServingCol}), updated_at = NOW()`,
-          [b.org_id, b.assigned_user_id, booking_date, b[tokenCol]]
-        );
-
-        // Basic avg calculation (served within today)
-        if (avgCol && mcols.has('service_started_at') && cols.has('created_at')) {
-          const [served] = await conn.query(
-            `SELECT TIMESTAMPDIFF(SECOND, created_at, NOW()) AS s
+      // naive avg service seconds: avg time from created_at to now for served today
+      if (mcols.has('avg_service_seconds') && cols.has('created_at')) {
+        const [servedRows] = await conn.query(
+          `SELECT TIMESTAMPDIFF(SECOND, created_at, NOW()) AS s
              FROM bookings
-             WHERE org_id = ? AND assigned_user_id = ? AND booking_date = ? AND status = 'served'`,
-            [b.org_id, b.assigned_user_id, booking_date]
+            WHERE org_id = ? AND assigned_user_id = ? AND booking_date = ? AND status = 'served'`,
+          [b.org_id, b.assigned_user_id, b.booking_date]
+        );
+        if (servedRows.length) {
+          const avg = Math.round(
+            servedRows.reduce((sum, r) => sum + num(r.s), 0) / Math.max(1, servedRows.length)
           );
-          if (served.length) {
-            const avg = Math.round(
-              served.reduce((sum, r) => sum + safeNumber(r.s), 0) / Math.max(1, served.length)
-            );
-            await conn.query(
-              `UPDATE assigned_live_metrics SET ${avgCol} = ?, updated_at = NOW()
-               WHERE org_id = ? AND assigned_user_id = ? AND booking_date = ?`,
-              [avg, b.org_id, b.assigned_user_id, booking_date]
-            );
-          }
+          await conn.query(
+            `UPDATE assigned_live_metrics
+                SET avg_service_seconds = ?, updated_at = NOW()
+              WHERE org_id = ? AND assigned_user_id = ? AND booking_date = ?`,
+            [avg, b.org_id, b.assigned_user_id, b.booking_date]
+          );
         }
       }
     }
 
     await conn.commit();
     res.json({ ok: true, served: true });
-  } catch (e) {
+  } catch (err) {
     try { await conn.rollback(); } catch {}
-    next(e);
+    next(err);
   } finally {
     conn.release();
   }
 });
 
-/* ----------------------------- cancel --------------------------- */
+/* ------------------------------------------------------------------ */
+/* Cancel booking                                                      */
+/* ------------------------------------------------------------------ */
 router.post('/:id/cancel', async (req, res, next) => {
   try {
-    const id = safeNumber(req.params.id);
+    const id = num(req.params.id);
     const cols = await getTableColumns('bookings');
     if (!cols.has('status')) {
       return res.status(400).json({ ok: false, error: 'status column missing on bookings' });
     }
     await db.query('UPDATE bookings SET status = ? WHERE id = ?', ['cancelled', id]);
     res.json({ ok: true, cancelled: true });
-  } catch (e) { next(e); }
+  } catch (err) { next(err); }
 });
 
-/* ------------------------------- edit --------------------------- */
+/* ------------------------------------------------------------------ */
+/* Edit booking                                                        */
+/* ------------------------------------------------------------------ */
 router.put('/:id', async (req, res, next) => {
   try {
-    const id = safeNumber(req.params.id);
+    const id = num(req.params.id);
     const body = req.body || {};
     const cols = await getTableColumns('bookings');
 
-    const pairs = [];
-    const params = [];
+    const schedCol = pickColumn(cols, 'scheduled_at', 'booking_datetime');
 
-    const mutable = [
+    const candidates = [
       ['user_name', body.user_name],
       ['user_phone', body.user_phone],
       ['user_alt_phone', body.user_alt_phone],
@@ -340,24 +367,26 @@ router.put('/:id', async (req, res, next) => {
       ['department', body.department],
       ['assigned_user_id', body.assigned_user_id],
       ['booking_date', body.booking_date],
-      [pickColumn(cols, 'scheduled_at', 'booking_datetime'), body.when ? dayjs(body.when).format('YYYY-MM-DD HH:mm:ss') : null],
+      [schedCol, body.when && dayjs(body.when).isValid() ? dayjs(body.when).format('YYYY-MM-DD HH:mm:ss') : null],
       ['query_issue', body.query_issue],
       ['status', body.status]
     ];
 
-    for (const [col, val] of mutable) {
-      if (col && cols.has(col) && typeof val !== 'undefined') {
-        pairs.push(`${col} = ?`);
-        params.push(val);
+    const sets = [];
+    const params = [];
+    for (const [c, v] of candidates) {
+      if (c && cols.has(c) && typeof v !== 'undefined') {
+        sets.push(`${c} = ?`);
+        params.push(v);
       }
     }
 
-    if (!pairs.length) return res.json({ ok: true, updated: 0 });
+    if (!sets.length) return res.json({ ok: true, updated: 0 });
 
     params.push(id);
-    const [r] = await db.query(`UPDATE bookings SET ${pairs.join(', ')} WHERE id = ?`, params);
+    const [r] = await db.query(`UPDATE bookings SET ${sets.join(', ')} WHERE id = ?`, params);
     res.json({ ok: true, updated: r.affectedRows || 0 });
-  } catch (e) { next(e); }
+  } catch (err) { next(err); }
 });
 
 module.exports = router;
