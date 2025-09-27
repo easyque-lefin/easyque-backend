@@ -1,136 +1,177 @@
-// routes/status.js — returns { org, booking, metrics } used by /public/status.html
+/* status.js – client for Live Queue Status + Reviews
+   Expects backend:
+   GET  /status/view?org_id=...&booking_id=... (or token/phone)
+        → { ok, org:{id,name,banner,map_url,google_review_url}, booking:{...}, metrics:{...} }
+   POST /reviews/create  (fallback: /reviews/add or /reviews)
+        body: { org_id, booking_id, rating, review, name }
+        → { ok:true }
+*/
 
-const express = require('express');
-const router = express.Router();
-const db = require('../services/db');
+const $ = (sel) => document.querySelector(sel);
 
-// Small helper: pick first non-empty
-const pick = (...vals) => vals.find(v => v !== null && v !== undefined && v !== '') ?? null;
+const qs = new URLSearchParams(location.search);
+const ORG_ID = qs.get("org_id");
+const BOOKING_ID = qs.get("booking_id") || null;
+const TOKEN = qs.get("token") || null;
+const PHONE = qs.get("phone") || null;
 
-/**
- * GET /status/view
- * Params:
- *  - org_id (required)
- *  - booking_id OR token (optional)
- *  - phone (optional; when token not unique)
- *
- * Response:
- *  {
- *    org: {
- *      id, name, map_url, org_banner_url, banner_url, google_review_url,
- *      banner    // computed: first non-empty of org_banner_url, banner_url
- *    },
- *    booking: {...} | null,
- *    metrics: { now_serving_token, avg_service_seconds, break_until, state, eta_seconds, queue_ahead } | null
- *  }
- */
-router.get('/view', async (req, res, next) => {
-  try {
-    const { org_id, booking_id, token, phone } = req.query;
-    if (!org_id) return res.status(400).json({ ok: false, error: 'org_id required' });
+let lastPayload = null;
+let pickedStars = 0;
 
-    // ---- ORG ----
-    const [orgRows] = await db.query(
-      `SELECT id, name, map_url, org_banner_url, banner_url, google_review_url
-       FROM organizations
-       WHERE id = ? LIMIT 1`,
-      [org_id]
-    );
-    const org = orgRows[0];
-    if (!org) return res.status(404).json({ ok: false, error: 'Organization not found' });
+/* ---------- Helpers ---------- */
+const fmtTime = (d) =>
+  d ? new Date(d).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
+const fmtDateTime = (d) =>
+  d ? new Date(d).toLocaleString([], { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
 
-    // computed banner field: prefer org_banner_url over old banner_url
-    org.banner = pick(org.org_banner_url, org.banner_url, null);
-
-    // ---- BOOKING (optional) ----
-    let booking = null;
-    if (booking_id) {
-      const [b] = await db.query(
-        `SELECT id, org_id, assigned_user_id, token_number, status,
-                customer_name, customer_phone, created_at
-         FROM bookings
-         WHERE id = ? AND org_id = ?
-         LIMIT 1`,
-        [booking_id, org_id]
-      );
-      booking = b[0] || null;
-    } else if (token) {
-      if (phone) {
-        const [b] = await db.query(
-          `SELECT id, org_id, assigned_user_id, token_number, status,
-                  customer_name, customer_phone, created_at
-           FROM bookings
-           WHERE org_id = ? AND token_number = ? AND customer_phone = ?
-           ORDER BY id DESC
-           LIMIT 1`,
-          [org_id, token, phone]
-        );
-        booking = b[0] || null;
-      } else {
-        const [b] = await db.query(
-          `SELECT id, org_id, assigned_user_id, token_number, status,
-                  customer_name, customer_phone, created_at
-           FROM bookings
-           WHERE org_id = ? AND token_number = ?
-           ORDER BY id DESC
-           LIMIT 1`,
-          [org_id, token]
-        );
-        booking = b[0] || null;
-      }
-    }
-
-    // ---- METRICS (prefer assignee of booking; fallback to org rollup) ----
-    let metrics = null;
-    if (booking?.assigned_user_id) {
-      const [m] = await db.query(
-        `SELECT org_id, assigned_user_id, now_serving_token, avg_service_seconds,
-                break_started_at, break_until, service_started_at, updated_at
-         FROM assigned_live_metrics
-         WHERE org_id = ? AND assigned_user_id = ?
-         ORDER BY updated_at DESC
-         LIMIT 1`,
-        [org_id, booking.assigned_user_id]
-      );
-      metrics = m[0] || null;
-    }
-    if (!metrics) {
-      const [m] = await db.query(
-        `SELECT org_id, NULL as assigned_user_id, now_serving_token, avg_service_seconds,
-                break_started_at, break_until, service_started_at, updated_at
-         FROM assigned_live_metrics
-         WHERE org_id = ? AND (assigned_user_id IS NULL OR assigned_user_id = 0)
-         ORDER BY updated_at DESC
-         LIMIT 1`,
-        [org_id]
-      );
-      metrics = m[0] || null;
-    }
-
-    // ---- Compute state + ETA (best-effort) ----
-    if (metrics) {
-      const now = Date.now();
-      const breakUntil = metrics.break_until ? new Date(metrics.break_until).getTime() : null;
-      let state = 'live';
-      if (breakUntil && breakUntil > now) state = 'break';
-      metrics.state = state;
-
-      if (booking?.token_number != null && metrics.now_serving_token != null) {
-        const ahead = Math.max(0, Number(booking.token_number) - Number(metrics.now_serving_token));
-        const avg = Math.max(30, Number(metrics.avg_service_seconds || 120));
-        metrics.eta_seconds = ahead * avg;
-        metrics.queue_ahead = ahead;
-      } else {
-        metrics.eta_seconds = null;
-        metrics.queue_ahead = null;
-      }
-    }
-
-    return res.json({ ok: true, org, booking, metrics });
-  } catch (e) {
-    next(e);
+/* ---------- Load status ---------- */
+async function fetchStatus() {
+  if (!ORG_ID) {
+    alert("Missing org_id");
+    return;
   }
-});
+  const url =
+    `/status/view?org_id=${encodeURIComponent(ORG_ID)}` +
+    (BOOKING_ID ? `&booking_id=${encodeURIComponent(BOOKING_ID)}` : "") +
+    (TOKEN ? `&token=${encodeURIComponent(TOKEN)}` : "") +
+    (PHONE ? `&phone=${encodeURIComponent(PHONE)}` : "");
 
-module.exports = router;
+  const res = await fetch(url, { credentials: "same-origin" });
+  const json = await res.json().catch(() => ({}));
+  if (!json.ok) throw new Error(json.error || "Failed to load");
+  lastPayload = json;
+  paint(json);
+}
+
+/* ---------- Paint UI ---------- */
+function paint({ org, booking, metrics }) {
+  // org name + map icon + banner
+  $("#orgName").textContent = org?.name ?? "Organization";
+  if (org?.map_url) {
+    $("#mapBtn").hidden = false;
+    $("#mapBtn").href = org.map_url;
+  } else {
+    $("#mapBtn").hidden = true;
+  }
+  if (org?.banner) {
+    $("#bannerImg").src = org.banner;
+  } else {
+    $("#bannerImg").style.display = "none";
+  }
+
+  // break banner
+  const onBreak = metrics?.state === "break" && metrics?.break_until;
+  $("#breakRibbon").hidden = !onBreak;
+  if (onBreak) {
+    $("#breakText").textContent = `Dr. on break  till ${fmtTime(metrics.break_until)}`;
+  }
+
+  // token numbers
+  const nowServing = Number(metrics?.now_serving_token ?? 0);
+  const yourToken = Number(booking?.token_number ?? 0);
+  $("#nowToken").textContent = nowServing || "—";
+  $("#yourToken").textContent = yourToken || "—";
+
+  // progress bar (how far the queue has advanced relative to your token)
+  let pct = 0;
+  if (yourToken && nowServing) {
+    pct = Math.max(0, Math.min(100, (nowServing / yourToken) * 100));
+  }
+  $("#progressFill").style.width = `${pct}%`;
+  $("#progressDot").textContent = String(nowServing || 0);
+
+  // service times
+  $("#serviceStart").textContent = fmtTime(metrics?.service_started_at);
+  const avgMin = metrics?.avg_service_seconds
+    ? Math.round(Number(metrics.avg_service_seconds) / 60)
+    : null;
+  $("#avgService").textContent = avgMin ? `${avgMin} minutes` : "—";
+
+  // booking info
+  $("#custName").textContent = booking?.customer_name ?? "—";
+  $("#assignedUser").textContent = booking?.assigned_user_name || booking?.assigned_user_id || "—";
+  $("#bookingId").textContent = booking?.id ?? "—";
+  $("#department").textContent = booking?.department ?? "—";
+  $("#custPhone").textContent = booking?.customer_phone ?? "—";
+  $("#bookingDate").textContent = fmtDateTime(booking?.created_at);
+}
+
+/* ---------- Reviews ---------- */
+function initStars() {
+  const stars = [...document.querySelectorAll(".star")];
+  const paintStars = (n) => {
+    stars.forEach((s, i) => s.classList.toggle("on", i < n));
+  };
+  stars.forEach((s) => {
+    s.addEventListener("mouseenter", () => paintStars(Number(s.dataset.v)));
+    s.addEventListener("mouseleave", () => paintStars(pickedStars));
+    s.addEventListener("click", () => {
+      pickedStars = Number(s.dataset.v);
+      paintStars(pickedStars);
+    });
+  });
+}
+
+async function submitReview() {
+  if (!lastPayload) return;
+  const rating = pickedStars;
+  const review = $("#reviewText").value.trim();
+  const name = $("#reviewName").value.trim();
+
+  if (!rating) {
+    $("#reviewMsg").textContent = "Please select a star rating.";
+    $("#reviewMsg").style.color = "var(--danger)";
+    return;
+  }
+
+  const body = {
+    org_id: ORG_ID,
+    booking_id: BOOKING_ID || lastPayload?.booking?.id || null,
+    rating,
+    review,
+    name
+  };
+
+  $("#submitBtn").disabled = true;
+  $("#reviewMsg").textContent = "Submitting...";
+  $("#reviewMsg").style.color = "var(--muted)";
+
+  // Try a few likely endpoints so it works with your backend
+  const endpoints = ["/reviews/create", "/reviews/add", "/reviews"];
+  let ok = false, lastErr = null;
+
+  for (const ep of endpoints) {
+    try {
+      const r = await fetch(ep, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const j = await r.json().catch(() => ({}));
+      if (j.ok) { ok = true; break; }
+      if (r.status === 404) continue;
+      lastErr = j.error || `HTTP ${r.status}`;
+    } catch (e) { lastErr = e.message; }
+  }
+
+  if (ok) {
+    $("#reviewMsg").textContent = "Thanks! Your review has been recorded.";
+    $("#reviewMsg").style.color = "var(--ok)";
+    $("#submitBtn").disabled = true;
+  } else {
+    $("#reviewMsg").textContent = `Could not submit review. ${lastErr ? `(${lastErr})` : ""}`;
+    $("#reviewMsg").style.color = "var(--danger)";
+    $("#submitBtn").disabled = false;
+  }
+}
+
+/* ---------- Init ---------- */
+(async function init(){
+  initStars();
+  $("#submitBtn").addEventListener("click", submitReview);
+
+  // first paint + polling
+  try { await fetchStatus(); } catch(e){ console.error(e); }
+  setInterval(fetchStatus, 15000);
+})();
 
