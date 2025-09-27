@@ -1,159 +1,214 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
+  <meta charset="utf-8" />
   <title>Live Queue Status</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
   <style>
-    :root{--bg:#0a0b0f;--card:#12131a;--muted:#9aa1ac;--accent:#4f8cff}
-    body{margin:0;background:var(--bg);color:#fff;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial}
-    .wrap{max-width:760px;margin:0 auto;padding:16px}
-    .pill{display:inline-flex;gap:8px;align-items:center;background:#1a1c25;border:1px solid #222633;color:#fff;padding:8px 12px;border-radius:999px}
-    .banner{width:100%;height:160px;background:#151823;border:1px solid #232536;border-radius:16px;overflow:hidden;margin:12px 0}
-    .banner img{width:100%;height:100%;object-fit:cover}
-    .card{background:var(--card);border:1px solid #262a36;border-radius:16px;padding:14px;margin:10px 0}
-    .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-    .progress{height:10px;border-radius:999px;background:#1c2030;overflow:hidden}
-    .progress > div{height:100%;width:0%;background:var(--accent);transition:width .5s}
-    .muted{color:var(--muted);font-size:13px}
-    .btn{display:inline-flex;align-items:center;gap:8px;border:1px solid #2a2f3f;background:#141826;color:#fff;padding:10px 12px;border-radius:12px;text-decoration:none}
-    .stars span{font-size:26px;cursor:pointer}
-    .stars .on{filter:drop-shadow(0 0 6px #ffad0d)}
-    .state{padding:4px 10px;border-radius:999px;font-size:12px;border:1px solid #2e3448;background:#141826}
+    :root{
+      --pri:#0A4FB3;
+      --pri2:#5AB7FF;
+      --accent:#FF6A00;
+      --danger:#D93025;
+      --ok:#16a34a;
+      --ink:#0f172a;
+      --muted:#64748b;
+      --card:#ffffff;
+      --bg:#f6f8fb;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,Segoe UI,Helvetica,Arial,sans-serif}
+    .page{max-width:420px;margin:0 auto;padding-bottom:72px}
+
+    /* Top strip */
+    .brandrow{display:flex;align-items:center;gap:14px;padding:12px 14px}
+    .logo{width:58px;height:58px;object-fit:contain}
+    .brandtxt{line-height:1;display:flex;flex-direction:column;gap:4px}
+    .brandtxt .title{font-weight:800;color:#0f5132;font-size:15px}
+    .brandtxt .subtitle{font-weight:800;color:#0f5132;font-size:12px}
+
+    /* Org name band + map icon */
+    .orgband{position:relative;margin:4px 14px 10px;background:linear-gradient(90deg,#1e3a8a,#ef4444);
+      color:#fff;border-radius:16px;padding:14px 46px 14px 16px;font-weight:800;font-size:18px}
+    .mapbtn{position:absolute;right:10px;top:50%;transform:translateY(-50%);width:36px;height:36px;border-radius:999px;
+      display:grid;place-items:center;background:#fff2;backdrop-filter:blur(2px)}
+    .mapbtn img{width:22px;height:22px;filter:invert(1)}
+    .mapbtn[hidden]{display:none}
+
+    /* Banner image */
+    .banner{margin:0 14px 10px;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 2px 8px #0001}
+    .banner img{width:100%;display:block;max-height:210px;object-fit:cover}
+
+    /* Break ribbon */
+    .break-ribbon{margin:10px auto 0;height:44px;display:grid;place-items:center}
+    .break-chip{background:#dbeafe;color:#0b5394;border-radius:10px;padding:10px 14px;font-weight:700;font-size:12px;
+      box-shadow:0 2px 6px #0001}
+    .break-ribbon[hidden]{display:none}
+
+    /* Live panel */
+    .livecard{margin:12px 14px;background:#e9f3ff;border-radius:16px;padding:18px 14px;box-shadow:inset 0 0 0 1px #dbeafe}
+    .heading{display:flex;justify-content:space-between;color:#0f172a;font-weight:700;margin-bottom:4px}
+    .dual{display:flex;gap:14px}
+    .tokenbox{flex:1;background:linear-gradient(180deg,#e0ecff,#cfe3ff);border-radius:16px;padding:12px 8px 10px;
+      display:grid;place-items:center;box-shadow:0 2px 5px #0001}
+    .tokennum{margin-top:6px;background:linear-gradient(180deg,#3b82f6,#1e40af);color:#fff;border-radius:16px;width:130px;height:120px;
+      display:grid;place-items:center;font-weight:800;font-size:48px;box-shadow:0 6px 14px #1e40af33}
+    .people{width:120px;opacity:.08;position:absolute;inset:auto 0 -6px 0;margin:auto;pointer-events:none}
+    .progress{margin:14px auto 0;width:85%;height:16px;background:#f1f5f9;border-radius:99px;overflow:hidden;position:relative}
+    .progress>span{display:block;height:100%;background:#22c55e;width:0%}
+    .progress .dot{position:absolute;inset:0;display:grid;place-items:center;font-size:12px;font-weight:700;color:#0f172a}
+
+    /* Stats stripe */
+    .stripe{margin:12px 14px;background:#fff7ed;border-radius:14px;padding:12px 10px;display:flex;gap:10px;justify-content:space-between;
+      border:1px solid #ffedd5}
+    .stripe .cell{flex:1;text-align:center;font-size:12px;font-weight:700}
+    .stripe .big{display:block;margin-top:6px;font-size:14px}
+
+    /* Booking info */
+    .card{background:var(--card);margin:10px 14px;border-radius:14px;padding:14px;box-shadow:0 2px 10px #0001}
+    .card h3{margin:0 0 8px;font-size:15px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px}
+    .label{font-size:12px;color:var(--muted)}
+    .value{font-weight:700}
+
+    /* Reviews */
+    .review-card{background:#fff;margin:10px 14px;border-radius:14px;padding:14px;box-shadow:0 2px 10px #0001}
+    .stars{display:flex;gap:6px;font-size:20px}
+    .star{cursor:pointer;filter:grayscale(1)}
+    .star.on{filter:none}
+    .review-row{display:flex;gap:8px;margin-top:10px}
+    .review-row input, .review-row textarea{flex:1;padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;font-family:inherit}
+    .btn{background:var(--pri);color:#fff;border:0;border-radius:10px;padding:10px 14px;font-weight:700;cursor:pointer}
+    .btn[disabled]{opacity:.6;cursor:not-allowed}
+    .note{font-size:11px;color:#475569;margin:10px 14px 18px;text-align:center}
+
+    .hide{display:none !important}
   </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="row">
-    <div id="orgName" class="pill">Loading...</div>
-    <a class="btn" id="mapBtn" target="_blank" rel="noopener">Open Map</a>
-    <a class="btn" id="gbtn" style="display:none" target="_blank" rel="noopener">Rate on Google</a>
-  </div>
+  <div class="page">
 
-  <div class="banner" id="banner"><!-- filled by JS --></div>
-
-  <div class="card">
-    <div class="row" style="justify-content:space-between">
-      <div>
-        <div class="muted">Now Serving</div>
-        <div id="nowServing" style="font-size:34px;font-weight:700">—</div>
-      </div>
-      <div style="text-align:right">
-        <div class="muted">Your Token</div>
-        <div id="yourToken" style="font-size:34px;font-weight:700">—</div>
+    <!-- brand strip (logo + “LIVE QUE STATUS”) -->
+    <div class="brandrow">
+      <img class="logo" src="https://i.imgur.com/5q1kZ8n.png" alt="EasyQue (placeholder)">
+      <div class="brandtxt">
+        <div class="title">LIVE  QUE STATUS</div>
       </div>
     </div>
-    <div class="progress" style="margin-top:12px"><div id="bar"></div></div>
-    <div class="row" style="justify-content:space-between;margin-top:8px">
-      <div class="muted">ETA: <span id="eta">—</span></div>
-      <div class="state" id="state">LIVE</div>
+
+    <!-- org name band and map icon -->
+    <div id="orgBand" class="orgband">
+      <span id="orgName">Organization Name</span>
+      <a id="mapBtn" class="mapbtn" href="#" target="_blank" rel="noopener" hidden>
+        <img alt="Open map" src="https://img.icons8.com/ios-filled/50/ffffff/marker.png">
+      </a>
     </div>
-  </div>
 
-  <div class="card">
-    <div class="muted">Booking</div>
-    <div id="binfo">—</div>
-  </div>
-
-  <div class="card">
-    <div class="muted">Rate your experience</div>
-    <div class="stars" id="stars">
-      <span data-v="1">★</span><span data-v="2">★</span><span data-v="3">★</span><span data-v="4">★</span><span data-v="5">★</span>
+    <!-- banner -->
+    <div class="banner">
+      <img id="bannerImg" src="https://i.imgur.com/qmP8vSg.jpg" alt="Banner">
     </div>
-    <textarea id="revText" placeholder="Write a short review (optional)" style="width:100%;height:80px;margin-top:8px;background:#0f121b;color:#fff;border:1px solid #2a2f3f;border-radius:10px;padding:8px"></textarea>
-    <button class="btn" id="sendRev" style="margin-top:8px">Submit Review</button>
+
+    <!-- break ribbon -->
+    <div id="breakRibbon" class="break-ribbon" hidden>
+      <div class="break-chip" id="breakText">On break till 12.15 PM</div>
+    </div>
+
+    <!-- live panel -->
+    <div class="livecard">
+      <div class="heading">
+        <div>Current Served<br/>Token</div>
+        <div style="text-align:right">Your<br/>Token No</div>
+      </div>
+
+      <div class="dual">
+        <div class="tokenbox">
+          <div class="tokennum" id="nowToken">—</div>
+        </div>
+        <div class="tokenbox">
+          <div class="tokennum" id="yourToken">—</div>
+        </div>
+      </div>
+
+      <div class="progress" aria-label="queue progress">
+        <span id="progressFill" style="width:0%"></span>
+        <div class="dot" id="progressDot">0</div>
+      </div>
+    </div>
+
+    <!-- service stripe -->
+    <div class="stripe">
+      <div class="cell">
+        Service start time <span class="big" id="serviceStart">—</span>
+      </div>
+      <div class="cell">
+        Avg.Service time till now <span class="big" id="avgService">—</span>
+      </div>
+    </div>
+
+    <!-- booking info -->
+    <div class="card">
+      <h3>Booking Info</h3>
+      <div class="grid">
+        <div>
+          <div class="label">Name</div>
+          <div class="value" id="custName">—</div>
+        </div>
+        <div>
+          <div class="label">Assigned User</div>
+          <div class="value" id="assignedUser">—</div>
+        </div>
+
+        <div>
+          <div class="label">Booking ID</div>
+          <div class="value" id="bookingId">—</div>
+        </div>
+        <div>
+          <div class="label">Department</div>
+          <div class="value" id="department">—</div>
+        </div>
+
+        <div>
+          <div class="label">Phone No</div>
+          <div class="value" id="custPhone">—</div>
+        </div>
+        <div>
+          <div class="label">Booking Date&Time</div>
+          <div class="value" id="bookingDate">—</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- reviews -->
+    <div class="review-card">
+      <div class="label" style="font-weight:800;margin-bottom:6px">Rate Service</div>
+      <div class="stars" id="stars">
+        <img class="star" data-v="1" src="https://img.icons8.com/emoji/48/star-emoji.png" alt="1">
+        <img class="star" data-v="2" src="https://img.icons8.com/emoji/48/star-emoji.png" alt="2">
+        <img class="star" data-v="3" src="https://img.icons8.com/emoji/48/star-emoji.png" alt="3">
+        <img class="star" data-v="4" src="https://img.icons8.com/emoji/48/star-emoji.png" alt="4">
+        <img class="star" data-v="5" src="https://img.icons8.com/emoji/48/star-emoji.png" alt="5">
+      </div>
+
+      <div class="review-row">
+        <input id="reviewName" type="text" placeholder="Your name (optional)">
+        <button id="submitBtn" class="btn" type="button">Submit</button>
+      </div>
+      <textarea id="reviewText" rows="3" placeholder="Write a short review (optional)" style="margin-top:8px;width:100%;resize:vertical;border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px"></textarea>
+
+      <div id="reviewMsg" class="label" style="margin-top:8px"></div>
+    </div>
+
+    <div class="note">
+      The queue status is only updated when the person you’ve booked marks the token as
+      served. If your status isn’t updating, please contact that person directly.
+    </div>
+
   </div>
-</div>
 
-<script>
-const qs = new URLSearchParams(location.search);
-const org_id = qs.get('org_id');
-const booking_id = qs.get('booking_id');
-const token = qs.get('token');
-const phone = qs.get('phone');
-
-const el = id => document.getElementById(id);
-
-let last = null;
-let myRating = 0;
-
-[...el('stars').querySelectorAll('span')].forEach(s=>{
-  s.onclick = ()=>{ myRating = Number(s.dataset.v); paintStars(); };
-});
-function paintStars(){
-  [...el('stars').querySelectorAll('span')].forEach(s=>{
-    s.classList.toggle('on', Number(s.dataset.v) <= myRating);
-  });
-}
-
-el('sendRev').onclick = async ()=>{
-  if(!myRating) return alert('Please select rating');
-  const body = {
-    org_id,
-    rating: myRating,
-    review: el('revText').value || null,
-    booking_id: last?.booking?.id || null,
-    assigned_user_id: last?.booking?.assigned_user_id || null
-  };
-  const r = await fetch('/reviews', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
-  const j = await r.json();
-  if(!j.ok) return alert(j.error || 'Failed');
-  alert('Thank you for the review!');
-  myRating = 0; el('revText').value = ''; paintStars();
-};
-
-async function load() {
-  const url = new URL('/status/view', location.origin);
-  if (org_id) url.searchParams.set('org_id', org_id);
-  if (booking_id) url.searchParams.set('booking_id', booking_id);
-  if (token) url.searchParams.set('token', token);
-  if (phone) url.searchParams.set('phone', phone);
-
-  const r = await fetch(url);
-  const j = await r.json();
-  if(!j.ok) { console.error(j); return; }
-  last = j;
-
-  const { org, booking, metrics } = j;
-
-  el('orgName').textContent = org.name || 'Org';
-  el('mapBtn').href = org.map_url || '#';
-  const banner = org.banner;
-  el('banner').innerHTML = banner ? `<img src="${banner}">` : '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:#9aa1ac">No banner</div>';
-
-  if (org.google_review_url) {
-    el('gbtn').href = org.google_review_url; el('gbtn').style.display = 'inline-flex';
-  }
-
-  el('nowServing').textContent = metrics?.now_serving_token ?? '—';
-  el('yourToken').textContent = booking?.token_number ?? (token || '—');
-  el('state').textContent = (metrics?.state || 'live').toUpperCase();
-
-  const etaSec = metrics?.eta_seconds;
-  if (etaSec != null) {
-    const m = Math.floor(etaSec/60), s = Math.floor(etaSec%60);
-    el('eta').textContent = `${m}m ${s}s`;
-  } else el('eta').textContent = '—';
-
-  const now = Number(metrics?.now_serving_token || 0);
-  const mine = Number(booking?.token_number || token || 0);
-  let pct = 0;
-  if (mine && now) {
-    const ahead = Math.max(0, mine - now);
-    const span = Math.max(1, ahead + 1);
-    pct = Math.max(0, Math.min(100, ((span - ahead) / span) * 100));
-  }
-  el('bar').style.width = pct + '%';
-
-  el('binfo').innerHTML = booking ? `
-    <div><b>${booking.customer_name || ''}</b> (${booking.customer_phone || ''})</div>
-    <div class="muted">Token #${booking.token_number} • ${booking.status || 'pending'}</div>
-  ` : `<div class="muted">Open queue view</div>`;
-}
-
-load();
-// Optional: Basic refresh
-setInterval(load, 15000);
-</script>
+  <script src="status.js"></script>
 </body>
 </html>
+
