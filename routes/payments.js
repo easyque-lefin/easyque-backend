@@ -7,10 +7,11 @@ const db = require('../services/db');
 const { createOrder, verifyWebhookSignature, recordEvent } = require('../services/razorpay');
 
 // ---- Helpers to read fee settings
+// ---- Helpers to read fee settings (renamed columns)
 async function getFeesMap() {
-  const [rows] = await db.query(`SELECT \`key\`, \`value\` FROM fee_settings`);
+  const [rows] = await db.query('SELECT setting_key, setting_value FROM fee_settings');
   const map = {};
-  for (const r of rows) map[r.key] = r.value;
+  for (const r of rows) map[r.setting_key] = r.setting_value;
   return map;
 }
 
@@ -18,6 +19,39 @@ function asNumber(x, def = 0) {
   const n = Number(x);
   return Number.isFinite(n) ? n : def;
 }
+
+// ---- POST /payments/calc  { mode, users_count, expected_bookings_per_day }
+router.post('/calc', async (req, res, next) => {
+  try {
+    const { mode = 'semi', users_count = 1, expected_bookings_per_day = 0 } = req.body || {};
+    const fees = await getFeesMap();
+
+    const annual          = asNumber(fees['option1.annual_fee'], 0);
+    const monthlyPerUser  = asNumber(fees['option1.monthly_per_user'], 0);
+    const msgCost         = asNumber(fees['option2.message_cost'], 1);
+    const taxPct          = asNumber(fees['tax.percent'], 0);
+
+    let base = 0;
+    if (mode === 'semi') {
+      base = annual + monthlyPerUser * asNumber(users_count, 1);
+    } else {
+      const perDay = asNumber(expected_bookings_per_day, 0);
+      const monthlyExpected = perDay * 30;
+      base = msgCost * monthlyExpected;
+    }
+
+    const tax = Math.round((base * taxPct) / 100);
+    const total = base + tax;
+
+    res.json({
+      ok: true,
+      inputs: { mode, users_count: Number(users_count), expected_bookings_per_day: Number(expected_bookings_per_day) },
+      fees: { annual, monthlyPerUser, msgCost, taxPct },
+      result: { base, tax, total }
+    });
+  } catch (e) { next(e); }
+});
+
 
 // ---- POST /payments/calc  { mode, users_count, expected_bookings_per_day }
 router.post('/calc', async (req, res, next) => {
@@ -125,3 +159,4 @@ router.post('/admin/fees', async (req, res, next) => {
 });
 
 module.exports = router;
+
