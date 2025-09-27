@@ -1,3 +1,4 @@
+// routes/bookings.js
 const express = require('express');
 const dayjs = require('dayjs');
 const db = require('../services/db'); // mysql2/promise pool
@@ -65,31 +66,20 @@ async function nextTokenForDay(conn, tableCols, org_id, assigned_user_id, bookin
 
 /* ------------------------------------------------------------------ */
 /* Create booking                                                      */
-/* Body:
-{
-  "org_id": 1,
-  "user_name": "Raju",
-  "user_phone": "918281235929",
-  "user_alt_phone": null,
-  "user_email": null,
-  "place": "Wayanad",
-  "department": "General",
-  "assigned_user_id": 5,
-  "when": null,                       // optional ISO datetime
-  "query_issue": "Fever"
-}
-*/
 /* ------------------------------------------------------------------ */
 router.post('/', async (req, res, next) => {
   const body = req.body || {};
   const org_id = num(body.org_id);
-  const assigned_user_id = num(body.assigned_user_id, 0);
+  const assigned_user_id = Number(body.assigned_user_id) || null; // force number (FK is INT)
 
-  if (!org_id || !body.user_name || !body.user_phone) {
-    return res.status(400).json({ ok: false, error: 'org_id, user_name and user_phone are required' });
+  if (!org_id || !body.user_name || !body.user_phone || !assigned_user_id) {
+    return res.status(400).json({ ok: false, error: 'org_id, user_name, user_phone, assigned_user_id are required' });
   }
 
+  // booking date = today (per requirements)
   const booking_date = dayjs().format('YYYY-MM-DD');
+
+  // optional exact schedule
   const scheduled_at =
     body.when && dayjs(body.when).isValid()
       ? dayjs(body.when).format('YYYY-MM-DD HH:mm:ss')
@@ -104,7 +94,6 @@ router.post('/', async (req, res, next) => {
     if (cols.has('token_number')) tokenCols.push('token_number');
     if (cols.has('token_no')) tokenCols.push('token_no');
 
-    // key cols presence checks
     if (!cols.has('booking_date')) {
       throw new Error('bookings.booking_date column is required in DB');
     }
@@ -129,58 +118,44 @@ router.post('/', async (req, res, next) => {
         ? `${dayjs(booking_date).format('YYYYMMDD')}-${assigned_user_id}-${token_value}`
         : null;
 
-    // dynamic column list (only what exists)
-    const colNames = [
-      'org_id',
-      'user_name',
-      'user_phone',
-      cols.has('user_alt_phone') ? 'user_alt_phone' : null,
-      cols.has('user_email') ? 'user_email' : null,
-      cols.has('place') ? 'place' : null,
-      cols.has('department') ? 'department' : null,
-      'assigned_user_id',
-      'booking_date',
-      schedCol,
-      ...tokenCols,                // write same token value to each existing token column
-      bookingNumberCol,
-      statusCol,
-      queryIssueCol,
-      createdAtCol
-    ].filter(Boolean);
+    // ---- build INSERT safely (cols / params / placeholders in lockstep)
+    const insertCols = [];
+    const params = [];
+    const ph = [];
 
-    const values = [
-      org_id,
-      body.user_name,
-      body.user_phone,
-      cols.has('user_alt_phone') ? (body.user_alt_phone || null) : undefined,
-      cols.has('user_email') ? (body.user_email || null) : undefined,
-      cols.has('place') ? (body.place || null) : undefined,
-      cols.has('department') ? (body.department || null) : undefined,
-      assigned_user_id,
-      booking_date,
-      schedCol ? (scheduled_at || null) : undefined,
-      ...tokenCols.map(() => token_value),
-      bookingNumberCol ? booking_number : undefined,
-      statusCol ? 'pending' : undefined,
-      queryIssueCol ? (body.query_issue || null) : undefined,
-      createdAtCol ? null : undefined // will swap to NOW() in the SQL text
-    ].filter(v => v !== undefined);
+    const add = (col, value) => {
+      insertCols.push(col);
+      params.push(value);
+      ph.push('?');
+    };
 
-    // placeholders
-    const placeholders = colNames.map(() => '?');
-    let sql = `INSERT INTO bookings (${colNames.join(', ')}) VALUES (${placeholders.join(', ')})`;
+    const addNow = col => {
+      insertCols.push(col);
+      // no param for NOW()
+      ph.push('NOW()');
+    };
 
-    // If created_at exists, replace its placeholder with NOW()
-    if (createdAtCol) {
-      const idx = colNames.lastIndexOf(createdAtCol);
-      placeholders[idx] = 'NOW()';
-      sql = `INSERT INTO bookings (${colNames.join(', ')}) VALUES (${placeholders.join(', ')})`;
-      // remove created_at value (we added null above)
-      const createdIdx = values.findIndex(v => v === null);
-      if (createdIdx !== -1) values.splice(createdIdx, 1);
-    }
+    add('org_id', org_id);
+    add('user_name', body.user_name);
+    add('user_phone', body.user_phone);
+    if (cols.has('user_alt_phone')) add('user_alt_phone', body.user_alt_phone ?? null);
+    if (cols.has('user_email')) add('user_email', body.user_email ?? null);
+    if (cols.has('place')) add('place', body.place ?? null);
+    if (cols.has('department')) add('department', body.department ?? null);
+    add('assigned_user_id', assigned_user_id);
+    add('booking_date', booking_date);
+    if (schedCol) add(schedCol, scheduled_at);
 
-    const [r] = await conn.query(sql, values);
+    // token columns: write same value to each existing token column
+    for (const t of tokenCols) add(t, token_value);
+
+    if (bookingNumberCol) add(bookingNumberCol, booking_number);
+    if (statusCol) add(statusCol, 'pending');
+    if (queryIssueCol) add(queryIssueCol, body.query_issue ?? null);
+    if (createdAtCol) addNow(createdAtCol); // literal NOW() — no param
+
+    const sql = `INSERT INTO bookings (${insertCols.join(', ')}) VALUES (${ph.join(', ')})`;
+    const [r] = await conn.query(sql, params);
     const booking_id = r.insertId;
 
     await conn.commit();
@@ -365,7 +340,7 @@ router.put('/:id', async (req, res, next) => {
       ['user_email', body.user_email],
       ['place', body.place],
       ['department', body.department],
-      ['assigned_user_id', body.assigned_user_id],
+      ['assigned_user_id', body.assigned_user_id ? Number(body.assigned_user_id) : null],
       ['booking_date', body.booking_date],
       [schedCol, body.when && dayjs(body.when).isValid() ? dayjs(body.when).format('YYYY-MM-DD HH:mm:ss') : null],
       ['query_issue', body.query_issue],
