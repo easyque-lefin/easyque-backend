@@ -19,6 +19,10 @@ const server = http.createServer(app);
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+// index.js (or your main server file)
+app.use('/organizations', require('./routes/organizations'));  // required for /organizations/*
+app.use('/orgs',          require('./routes/organizations'));  // safe alias for /orgs/* (optional but handy)
+
 // ---------- CORS
 const CORS_ORIGINS = (process.env.CORS_ORIGINS ||
   'http://localhost:5008,https://api.easyque.org,https://status.easyque.org')
@@ -138,3 +142,4 @@ try { require('./services/billingScheduler').start(); } catch { console.warn('Bi
 server.listen(PORT, () => {
   console.log(`EasyQue backend running on http://localhost:${PORT}`);
 });
+
