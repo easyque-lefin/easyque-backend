@@ -194,3 +194,6 @@ router.post('/:id/map', requireAuth, async (req, res, next) => {
 });
 
 module.exports = router;
+module.exports = router;
+module.exports.default = router;   // <-- add this line to support loaders that use .default
+
