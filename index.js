@@ -1,126 +1,197 @@
-// index.js — EasyQue backend entry
-// - Robust router loader (handles module.exports and default export)
-// - Serves /public and /uploads
-// - CORS for localhost + your subdomains
-// - Health endpoint
-// - Auto-frees the port if it's already in use, then retries
+// routes/organizations.js
+// Organization settings: limits (trial/paid + caps), banner (url or upload), map.
+// CommonJS. Uses services/db and middleware/auth (requireAuth).
 
-require('dotenv').config();
 const express = require('express');
-const http = require('http');
 const path = require('path');
-const cors = require('cors');
-const { exec } = require('child_process');
+const multer = require('multer');
 
-const app = express();
-const server = http.createServer(app);
+const router = express.Router();
+const db = require('../services/db');
+const { requireAuth } = require('../middleware/auth');
 
-// ---------- Body parsers (before routes)
-app.use(express.json({ limit: '2mb' }));
-app.use(express.urlencoded({ extended: true }));
+// Disk upload for banner (optional)
+const upload = multer({ dest: path.join(__dirname, '..', 'uploads') });
 
-// ---------- CORS
-const CORS_ORIGINS = (process.env.CORS_ORIGINS ||
-  'http://localhost:5008,https://api.easyque.org,https://status.easyque.org')
-  .split(',')
-  .map(s => s.trim())
-  .filter(Boolean);
-
-app.use(cors({ origin: CORS_ORIGINS, credentials: true }));
-
-// ---------- Static
-app.use('/public', express.static(path.join(__dirname, 'public')));
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
-// ---------- Health
-app.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
-
-// ---------- Helper: safe route loader
-function loadRouter(modulePath, name) {
+/* ----------------------------------------------------
+ * GET /organizations/:id
+ * Basic org details
+ * -------------------------------------------------- */
+router.get('/:id', requireAuth, async (req, res, next) => {
   try {
-    const mod = require(modulePath);
-    // Express routers are functions (middleware). Some bundlers export under .default.
-    const candidate =
-      (typeof mod === 'function') ? mod :
-      (mod && typeof mod.default === 'function') ? mod.default :
-      null;
-
-    if (!candidate) {
-      console.error(`⚠️  Route "${name}" misconfigured at ${modulePath}. Export a router function.`);
-      return (_req, res) => res.status(500).json({ ok: false, error: `Route "${name}" misconfigured` });
-    }
-    return candidate;
-  } catch (e) {
-    console.warn(`⚠️  Route "${name}" not found at ${modulePath} (skipping).`, e.message);
-    return (_req, res) => res.status(501).json({ ok: false, error: `Route "${name}" not installed` });
-  }
-}
-
-// ---------- Routes (mount everything via loadRouter)
-app.use('/auth',          loadRouter('./routes/auth', 'auth'));
-app.use('/users',         loadRouter('./routes/users', 'users'));
-app.use('/bookings',      loadRouter('./routes/bookings', 'bookings'));
-
-// Organizations: mount BOTH paths to the same file
-app.use('/organizations', loadRouter('./routes/organizations', 'organizations'));
-app.use('/orgs',          loadRouter('./routes/organizations', 'organizations')); // alias
-
-app.use('/payments',      loadRouter('./routes/payments', 'payments'));
-app.use('/billing',       loadRouter('./routes/billing', 'billing'));
-app.use('/status',        loadRouter('./routes/status', 'status'));
-app.use('/reviews',       loadRouter('./routes/reviews', 'reviews'));
-
-// Root -> login page (optional)
-app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
-
-// ---------- Error handler
-// eslint-disable-next-line no-unused-vars
-app.use((err, _req, res, _next) => {
-  console.error('ERR', err);
-  res.status(err.status || 500).json({ ok: false, error: err.message || 'Server error' });
+    const { id } = req.params;
+    const [rows] = await db.query(
+      `SELECT id, name, banner_url, org_banner_url, google_map_url,
+              lat, lng, now_serving_token,
+              plan_mode, trial_starts_at, trial_ends_at,
+              messaging_option, users_limit, daily_booking_limit, monthly_booking_limit,
+              expected_bookings_per_day
+         FROM organizations WHERE id = ?`, [id]
+    );
+    if (!rows.length) return res.status(404).json({ ok: false, error: 'org_not_found' });
+    res.json({ ok: true, org: rows[0] });
+  } catch (e) { next(e); }
 });
 
-// ---------- Listen + auto free port logic
-const PORT = Number(process.env.PORT || 5008);
+/* ----------------------------------------------------
+ * GET /organizations/:id/limits
+ * Read limits and plan info
+ * -------------------------------------------------- */
+router.get('/:id/limits', requireAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const [rows] = await db.query(
+      `SELECT id, name,
+              plan_mode, trial_starts_at, trial_ends_at,
+              messaging_option,
+              users_limit, daily_booking_limit, monthly_booking_limit,
+              expected_bookings_per_day
+         FROM organizations WHERE id = ?`, [id]
+    );
+    if (!rows.length) return res.status(404).json({ ok: false, error: 'org_not_found' });
+    res.json({ ok: true, limits: rows[0] });
+  } catch (e) { next(e); }
+});
 
-function freePortAndRetry() {
-  console.error(`\n⚠️  Port ${PORT} is in use. Trying to free it...`);
-  const isWin = process.platform === 'win32';
+/* ----------------------------------------------------
+ * POST /organizations/:id/limits
+ * Body:
+ * {
+ *   plan_mode: 'trial' | 'paid',
+ *   trial_days?: number (default 7),
+ *   messaging_option?: 'option1' | 'option2',
+ *   users_limit?: number,
+ *   daily_booking_limit?: number,
+ *   monthly_booking_limit?: number,
+ *   expected_bookings_per_day?: number
+ * }
+ * -------------------------------------------------- */
+router.post('/:id/limits', requireAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const {
+      plan_mode,
+      trial_days = 7,
+      messaging_option,
+      users_limit,
+      daily_booking_limit,
+      monthly_booking_limit,
+      expected_bookings_per_day
+    } = req.body || {};
 
-  const cmdWin = `for /f "tokens=5" %a in ('netstat -ano ^| findstr :${PORT}') do taskkill /F /PID %a`;
-  const cmdNix = `pid=$(lsof -t -i:${PORT} -sTCP:LISTEN 2>/dev/null); if [ -n "$pid" ]; then kill -9 $pid; fi`;
+    if (!plan_mode || !['trial', 'paid'].includes(plan_mode)) {
+      return res.status(400).json({ ok: false, error: 'invalid_plan_mode' });
+    }
+    if (messaging_option && !['option1', 'option2'].includes(messaging_option)) {
+      return res.status(400).json({ ok: false, error: 'invalid_messaging_option' });
+    }
 
-  exec(isWin ? `cmd /c "${cmdWin}"` : cmdNix, (error, stdout, stderr) => {
-    if (error) {
-      console.error(`❌ Could not free port ${PORT}: ${error.message}`);
-      process.exit(1);
+    // Compute trial window if trial mode
+    let trialStarts = null, trialEnds = null;
+    if (plan_mode === 'trial') {
+      const [nowRows] = await db.query('SELECT NOW() AS now');
+      const now = new Date(nowRows[0].now);
+      trialStarts = now;
+      trialEnds = new Date(now.getTime() + Number(trial_days || 7) * 86400000);
+    }
+
+    const fields = ['plan_mode = ?'];
+    const vals = [plan_mode];
+
+    if (plan_mode === 'trial') {
+      fields.push('trial_starts_at = ?', 'trial_ends_at = ?');
+      vals.push(trialStarts, trialEnds);
     } else {
-      if (stdout) console.log(stdout.trim());
-      if (stderr) console.log(stderr.trim());
-      console.log(`✅ Freed port ${PORT}. Restarting...`);
-      setTimeout(() => {
-        server.listen(PORT, () => {
-          console.log(`EasyQue backend running on http://localhost:${PORT}`);
-        });
-      }, 1200);
+      fields.push('trial_starts_at = NULL', 'trial_ends_at = NULL');
     }
-  });
-}
 
-server.on('error', (err) => {
-  if (err && err.code === 'EADDRINUSE') {
-    freePortAndRetry();
-  } else {
-    console.error('Server error:', err);
-    process.exit(1);
-  }
+    if (messaging_option)                   { fields.push('messaging_option = ?');             vals.push(messaging_option); }
+    if (typeof users_limit !== 'undefined') { fields.push('users_limit = ?');                  vals.push(Number(users_limit)); }
+    if (typeof daily_booking_limit !== 'undefined')   { fields.push('daily_booking_limit = ?');   vals.push(Number(daily_booking_limit)); }
+    if (typeof monthly_booking_limit !== 'undefined') { fields.push('monthly_booking_limit = ?'); vals.push(Number(monthly_booking_limit)); }
+    if (typeof expected_bookings_per_day !== 'undefined') { fields.push('expected_bookings_per_day = ?'); vals.push(Number(expected_bookings_per_day)); }
+
+    vals.push(id);
+
+    const sql = `UPDATE organizations SET ${fields.join(', ')} WHERE id = ?`;
+    await db.query(sql, vals);
+
+    const [rows] = await db.query(
+      `SELECT id, name,
+              plan_mode, trial_starts_at, trial_ends_at,
+              messaging_option,
+              users_limit, daily_booking_limit, monthly_booking_limit,
+              expected_bookings_per_day
+         FROM organizations WHERE id = ?`, [id]
+    );
+    res.json({ ok: true, limits: rows[0] });
+  } catch (e) { next(e); }
 });
 
-// Start daily billing scheduler (02:00 run)
-try { require('./services/billingScheduler').start(); } catch { console.warn('BillingScheduler not started'); }
-
-server.listen(PORT, () => {
-  console.log(`EasyQue backend running on http://localhost:${PORT}`);
+/* ----------------------------------------------------
+ * PUT /organizations/:id/banner-url
+ * JSON: { org_banner_url?, banner_url?, google_map_url?, lat?, lng? }
+ * -------------------------------------------------- */
+router.put('/:id/banner-url', requireAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { org_banner_url, banner_url, google_map_url, lat, lng } = req.body || {};
+    await db.query(
+      `UPDATE organizations
+          SET org_banner_url = COALESCE(?, org_banner_url),
+              banner_url     = COALESCE(?, banner_url),
+              google_map_url = COALESCE(?, google_map_url),
+              lat            = COALESCE(?, lat),
+              lng            = COALESCE(?, lng)
+        WHERE id = ?`,
+      [org_banner_url || null, banner_url || null, google_map_url || null, lat || null, lng || null, id]
+    );
+    res.json({ ok: true });
+  } catch (e) { next(e); }
 });
+
+/* ----------------------------------------------------
+ * PUT /organizations/:id/banner
+ * form-data: banner (file)
+ * -------------------------------------------------- */
+router.put('/:id/banner', requireAuth, upload.single('banner'), async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    if (!req.file) return res.status(400).json({ ok: false, error: 'file_required' });
+
+    const rel = `/uploads/${req.file.filename}`;
+    const url =
+      process.env.APP_PUBLIC_BASE_URL
+        ? `${process.env.APP_PUBLIC_BASE_URL}${rel}`
+        : rel;
+
+    await db.query(`UPDATE organizations SET org_banner_url = ? WHERE id = ?`, [url, id]);
+    res.json({ ok: true, url });
+  } catch (e) { next(e); }
+});
+
+/* ----------------------------------------------------
+ * POST /organizations/:id/map
+ * Body: { google_map_url, lat?, lng? }
+ * -------------------------------------------------- */
+router.post('/:id/map', requireAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { google_map_url, lat, lng } = req.body || {};
+    await db.query(
+      `UPDATE organizations
+          SET google_map_url = COALESCE(?, google_map_url),
+              lat            = COALESCE(?, lat),
+              lng            = COALESCE(?, lng)
+        WHERE id = ?`,
+      [google_map_url || null, lat || null, lng || null, id]
+    );
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// Support both CommonJS default + named loading
+module.exports = router;
+module.exports.default = router;
 
 
