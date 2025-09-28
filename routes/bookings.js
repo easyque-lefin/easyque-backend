@@ -1,14 +1,17 @@
 // routes/bookings.js
 const express = require('express');
 const dayjs = require('dayjs');
-const db = require('../services/db'); // mysql2/promise pool
 const router = express.Router();
 
-const APP_URL = process.env.APP_URL || 'http://localhost:5008';
+const db = require('../services/db');                  // mysql2/promise pool
+const { requireAuth } = require('../middleware/auth'); // your existing auth middleware
+const { enforceOrgLimits } = require('../middleware/limits'); // trial/cap enforcement
+
+// In production we want to default to the public status page host:
 const LIVE_BASE_URL =
   process.env.LIVE_BASE_URL && process.env.LIVE_BASE_URL.startsWith('http')
     ? process.env.LIVE_BASE_URL
-    : `${APP_URL}/public/status.html`;
+    : 'https://status.easyque.org/status.html';
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                            */
@@ -50,7 +53,10 @@ function buildMessagingLinks(phone, statusLink) {
   };
 }
 
-/* Token generation: per org × assigned_user × day (transaction safe) */
+/**
+ * Token generation: per org × assigned_user × day (transaction-safe).
+ * Requires: bookings.booking_date and one of token_number/token_no present.
+ */
 async function nextTokenForDay(conn, tableCols, org_id, assigned_user_id, booking_date) {
   const tokenCol = pickColumn(tableCols, 'token_number', 'token_no');
   if (!tokenCol) throw new Error('Token column not found (token_number or token_no)');
@@ -64,29 +70,24 @@ async function nextTokenForDay(conn, tableCols, org_id, assigned_user_id, bookin
   return num(rows[0]?.max_tok, 0) + 1;
 }
 
-import { enforceOrgLimits } from '../lib/limits.js';
-
-// ...
-
-router.post('/bookings', requireAuth, enforceOrgLimits, async (req, res) => {
-  // ... your existing create code
-});
-
-
-
 /* ------------------------------------------------------------------ */
 /* Create booking                                                      */
+/* POST /bookings                                                     */
+/* Body requires: org_id, user_name, user_phone, assigned_user_id     */
+/* Optional: department, when (ISO datetime), user_alt_phone, etc.    */
 /* ------------------------------------------------------------------ */
-router.post('/', async (req, res, next) => {
+router.post('/', requireAuth, enforceOrgLimits, async (req, res, next) => {
   const body = req.body || {};
   const org_id = num(body.org_id);
   const assigned_user_id = Number(body.assigned_user_id) || null; // force number (FK is INT)
 
   if (!org_id || !body.user_name || !body.user_phone || !assigned_user_id) {
-    return res.status(400).json({ ok: false, error: 'org_id, user_name, user_phone, assigned_user_id are required' });
+    return res
+      .status(400)
+      .json({ ok: false, error: 'org_id, user_name, user_phone, assigned_user_id are required' });
   }
 
-  // booking date = today (per requirements)
+  // booking date = today (per requirements/spec)
   const booking_date = dayjs().format('YYYY-MM-DD');
 
   // optional exact schedule
@@ -99,18 +100,18 @@ router.post('/', async (req, res, next) => {
   try {
     const cols = await getTableColumns('bookings');
 
-    // token columns (support both)
-    const tokenCols = [];
-    if (cols.has('token_number')) tokenCols.push('token_number');
-    if (cols.has('token_no')) tokenCols.push('token_no');
-
+    // Validate required columns
     if (!cols.has('booking_date')) {
       throw new Error('bookings.booking_date column is required in DB');
     }
+    const tokenCols = [];
+    if (cols.has('token_number')) tokenCols.push('token_number');
+    if (cols.has('token_no')) tokenCols.push('token_no');
     if (tokenCols.length === 0) {
       throw new Error('bookings token column is required (token_number or token_no)');
     }
 
+    // Optional columns we’ll fill if present
     const schedCol = pickColumn(cols, 'scheduled_at', 'booking_datetime');
     const statusCol = cols.has('status') ? 'status' : null;
     const queryIssueCol = cols.has('query_issue') ? 'query_issue' : null;
@@ -119,16 +120,16 @@ router.post('/', async (req, res, next) => {
 
     await conn.beginTransaction();
 
-    // compute token
+    // Compute next token
     const token_value = await nextTokenForDay(conn, cols, org_id, assigned_user_id, booking_date);
 
-    // readable booking number if column exists
+    // Readable booking number if that column exists
     const booking_number =
       bookingNumberCol
         ? `${dayjs(booking_date).format('YYYYMMDD')}-${assigned_user_id}-${token_value}`
         : null;
 
-    // ---- build INSERT safely (cols / params / placeholders in lockstep)
+    // ---- Build INSERT safely (cols / params / placeholders)
     const insertCols = [];
     const params = [];
     const ph = [];
@@ -141,17 +142,18 @@ router.post('/', async (req, res, next) => {
 
     const addNow = col => {
       insertCols.push(col);
-      // no param for NOW()
-      ph.push('NOW()');
+      ph.push('NOW()'); // literal
     };
 
     add('org_id', org_id);
     add('user_name', body.user_name);
     add('user_phone', body.user_phone);
+
     if (cols.has('user_alt_phone')) add('user_alt_phone', body.user_alt_phone ?? null);
-    if (cols.has('user_email')) add('user_email', body.user_email ?? null);
-    if (cols.has('place')) add('place', body.place ?? null);
-    if (cols.has('department')) add('department', body.department ?? null);
+    if (cols.has('user_email'))     add('user_email', body.user_email ?? null);
+    if (cols.has('place'))          add('place', body.place ?? null);
+    if (cols.has('department'))     add('department', body.department ?? null);
+
     add('assigned_user_id', assigned_user_id);
     add('booking_date', booking_date);
     if (schedCol) add(schedCol, scheduled_at);
@@ -160,9 +162,9 @@ router.post('/', async (req, res, next) => {
     for (const t of tokenCols) add(t, token_value);
 
     if (bookingNumberCol) add(bookingNumberCol, booking_number);
-    if (statusCol) add(statusCol, 'pending');
-    if (queryIssueCol) add(queryIssueCol, body.query_issue ?? null);
-    if (createdAtCol) addNow(createdAtCol); // literal NOW() — no param
+    if (statusCol)        add(statusCol, 'pending');
+    if (queryIssueCol)    add(queryIssueCol, body.query_issue ?? null);
+    if (createdAtCol)     addNow(createdAtCol);
 
     const sql = `INSERT INTO bookings (${insertCols.join(', ')}) VALUES (${ph.join(', ')})`;
     const [r] = await conn.query(sql, params);
@@ -201,7 +203,7 @@ router.post('/', async (req, res, next) => {
 /* List bookings (today by default)                                    */
 /* GET /bookings?org_id=1&date=YYYY-MM-DD&assigned_user_id=5&department=Cardio */
 /* ------------------------------------------------------------------ */
-router.get('/', async (req, res, next) => {
+router.get('/', requireAuth, async (req, res, next) => {
   try {
     const org_id = num(req.query.org_id);
     if (!org_id) return res.status(400).json({ ok: false, error: 'org_id required' });
@@ -242,7 +244,7 @@ router.get('/', async (req, res, next) => {
 /* ------------------------------------------------------------------ */
 /* Booking details                                                     */
 /* ------------------------------------------------------------------ */
-router.get('/:id', async (req, res, next) => {
+router.get('/:id', requireAuth, async (req, res, next) => {
   try {
     const id = num(req.params.id);
     const [rows] = await db.query('SELECT * FROM bookings WHERE id = ?', [id]);
@@ -254,7 +256,7 @@ router.get('/:id', async (req, res, next) => {
 /* ------------------------------------------------------------------ */
 /* Serve booking                                                       */
 /* ------------------------------------------------------------------ */
-router.post('/:id/serve', async (req, res, next) => {
+router.post('/:id/serve', requireAuth, async (req, res, next) => {
   const conn = await db.getConnection();
   try {
     const id = num(req.params.id);
@@ -320,7 +322,7 @@ router.post('/:id/serve', async (req, res, next) => {
 /* ------------------------------------------------------------------ */
 /* Cancel booking                                                      */
 /* ------------------------------------------------------------------ */
-router.post('/:id/cancel', async (req, res, next) => {
+router.post('/:id/cancel', requireAuth, async (req, res, next) => {
   try {
     const id = num(req.params.id);
     const cols = await getTableColumns('bookings');
@@ -335,7 +337,7 @@ router.post('/:id/cancel', async (req, res, next) => {
 /* ------------------------------------------------------------------ */
 /* Edit booking                                                        */
 /* ------------------------------------------------------------------ */
-router.put('/:id', async (req, res, next) => {
+router.put('/:id', requireAuth, async (req, res, next) => {
   try {
     const id = num(req.params.id);
     const body = req.body || {};
