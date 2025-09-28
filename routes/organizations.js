@@ -1,196 +1,130 @@
 // routes/organizations.js
-// Organization settings: limits (trial/paid + caps), banner (url or upload), map.
-// CommonJS. Uses services/db and middleware/auth (requireAuth).
+// Organizations router with ping + GET/POST :id/limits
+// Accepts plan_mode = 'semi' | 'full' | 'trial'
+// If 'trial' and trial_days provided, sets trial_starts_at/ends_at (only if columns exist)
 
 const express = require('express');
-const path = require('path');
-const multer = require('multer');
-
 const router = express.Router();
 const db = require('../services/db');
 const { requireAuth } = require('../middleware/auth');
 
-// Disk upload for banner (optional)
-const upload = multer({ dest: path.join(__dirname, '..', 'uploads') });
-
-/* ----------------------------------------------------
- * GET /organizations/:id
- * Basic org details
- * -------------------------------------------------- */
-router.get('/:id', requireAuth, async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const [rows] = await db.query(
-      `SELECT id, name, banner_url, org_banner_url, google_map_url,
-              lat, lng, now_serving_token,
-              plan_mode, trial_starts_at, trial_ends_at,
-              messaging_option, users_limit, daily_booking_limit, monthly_booking_limit,
-              expected_bookings_per_day
-         FROM organizations WHERE id = ?`, [id]
-    );
-    if (!rows.length) return res.status(404).json({ ok: false, error: 'org_not_found' });
-    res.json({ ok: true, org: rows[0] });
-  } catch (e) { next(e); }
+// --- Proof router is mounted ---
+router.get('/ping', (req, res) => {
+  res.json({ ok: true, where: 'organizations', ts: new Date().toISOString() });
 });
 
-/* ----------------------------------------------------
- * GET /organizations/:id/limits
- * Read limits and plan info
- * -------------------------------------------------- */
+// --- GET /organizations/:id/limits ---
 router.get('/:id/limits', requireAuth, async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const [rows] = await db.query(
-      `SELECT id, name,
-              plan_mode, trial_starts_at, trial_ends_at,
-              messaging_option,
-              users_limit, daily_booking_limit, monthly_booking_limit,
-              expected_bookings_per_day
-         FROM organizations WHERE id = ?`, [id]
-    );
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ ok: false, error: 'invalid_org_id' });
+
+    const [rows] = await db.query(`SELECT * FROM organizations WHERE id = ?`, [id]);
     if (!rows.length) return res.status(404).json({ ok: false, error: 'org_not_found' });
+
     res.json({ ok: true, limits: rows[0] });
-  } catch (e) { next(e); }
+  } catch (err) { next(err); }
 });
 
-/* ----------------------------------------------------
- * POST /organizations/:id/limits
- * Body:
- * {
- *   plan_mode: 'trial' | 'paid',
- *   trial_days?: number (default 7),
- *   messaging_option?: 'option1' | 'option2',
- *   users_limit?: number,
- *   daily_booking_limit?: number,
- *   monthly_booking_limit?: number,
- *   expected_bookings_per_day?: number
- * }
- * -------------------------------------------------- */
+// --- POST /organizations/:id/limits ---
+// Body can include:
+//   plan_mode: 'semi'|'full'|'trial'
+//   trial_days: number (used only when plan_mode='trial')
+//   users_count / users_limit
+//   map_url
+//   messaging_option: 'option1'|'option2'
+//   daily_booking_limit / monthly_booking_limit / expected_bookings_per_day
 router.post('/:id/limits', requireAuth, async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const {
-      plan_mode,
-      trial_days = 7,
-      messaging_option,
-      users_limit,
-      daily_booking_limit,
-      monthly_booking_limit,
-      expected_bookings_per_day
-    } = req.body || {};
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ ok: false, error: 'invalid_org_id' });
 
-    if (!plan_mode || !['trial', 'paid'].includes(plan_mode)) {
-      return res.status(400).json({ ok: false, error: 'invalid_plan_mode' });
-    }
-    if (messaging_option && !['option1', 'option2'].includes(messaging_option)) {
-      return res.status(400).json({ ok: false, error: 'invalid_messaging_option' });
+    const body = req.body || {};
+
+    // --- Validate plan_mode for your product ---
+    const allowedModes = new Set(['semi', 'full', 'trial']);
+    if (body.plan_mode && !allowedModes.has(String(body.plan_mode))) {
+      return res.status(400).json({
+        ok: false,
+        error: 'invalid_plan_mode (use "semi", "full" or "trial")'
+      });
     }
 
-    // Compute trial window if trial mode
-    let trialStarts = null, trialEnds = null;
-    if (plan_mode === 'trial') {
-      const [nowRows] = await db.query('SELECT NOW() AS now');
-      const now = new Date(nowRows[0].now);
-      trialStarts = now;
-      trialEnds = new Date(now.getTime() + Number(trial_days || 7) * 86400000);
+    // --- Discover actual columns to stay compatible with your live DB ---
+    const [colsRows] = await db.query(
+      `SELECT COLUMN_NAME
+         FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'organizations'`
+    );
+    const cols = new Set(colsRows.map(r => r.COLUMN_NAME));
+
+    const sets = [];
+    const vals = [];
+    const nowSql = 'NOW()';
+
+    const setIf = (col, val) => {
+      if (cols.has(col) && typeof val !== 'undefined') {
+        sets.push(`${col} = ?`);
+        vals.push(val);
+      }
+    };
+    const setNowIf = (col) => {
+      if (cols.has(col)) {
+        sets.push(`${col} = ${nowSql}`);
+      }
+    };
+    const setNullIf = (col) => {
+      if (cols.has(col)) {
+        sets.push(`${col} = NULL`);
+      }
+    };
+
+    // --- plan_mode + trial windows ---
+    if (typeof body.plan_mode !== 'undefined') {
+      setIf('plan_mode', body.plan_mode);
+      if (body.plan_mode === 'trial') {
+        // When entering trial, set trial_starts_at=NOW() and trial_ends_at=NOW()+trial_days
+        const trialDays = Number(body.trial_days) || 7;
+        if (cols.has('trial_starts_at')) setNowIf('trial_starts_at');
+        if (cols.has('trial_ends_at'))  sets.push(`trial_ends_at = DATE_ADD(${nowSql}, INTERVAL ? DAY)`), vals.push(trialDays);
+      } else {
+        // when switching to paid, clear trial dates if columns exist
+        if (cols.has('trial_starts_at')) setNullIf('trial_starts_at');
+        if (cols.has('trial_ends_at'))  setNullIf('trial_ends_at');
+      }
     }
 
-    const fields = ['plan_mode = ?'];
-    const vals = [plan_mode];
-
-    if (plan_mode === 'trial') {
-      fields.push('trial_starts_at = ?', 'trial_ends_at = ?');
-      vals.push(trialStarts, trialEnds);
-    } else {
-      fields.push('trial_starts_at = NULL', 'trial_ends_at = NULL');
+    // --- messaging plan selection ---
+    // (Only applied if column exists; otherwise ignored harmlessly)
+    if (typeof body.messaging_option !== 'undefined') {
+      setIf('messaging_option', body.messaging_option); // enum('option1','option2') if you add it
     }
 
-    if (messaging_option)                   { fields.push('messaging_option = ?');             vals.push(messaging_option); }
-    if (typeof users_limit !== 'undefined') { fields.push('users_limit = ?');                  vals.push(Number(users_limit)); }
-    if (typeof daily_booking_limit !== 'undefined')   { fields.push('daily_booking_limit = ?');   vals.push(Number(daily_booking_limit)); }
-    if (typeof monthly_booking_limit !== 'undefined') { fields.push('monthly_booking_limit = ?'); vals.push(Number(monthly_booking_limit)); }
-    if (typeof expected_bookings_per_day !== 'undefined') { fields.push('expected_bookings_per_day = ?'); vals.push(Number(expected_bookings_per_day)); }
+    // --- common caps/fields ---
+    // Your table uses users_count (not users_limit)
+    if (typeof body.users_count !== 'undefined') setIf('users_count', body.users_count);
+    if (typeof body.users_limit !== 'undefined') setIf('users_count', body.users_limit); // accept alias from UI
+
+    if (typeof body.map_url !== 'undefined') setIf('map_url', body.map_url);
+
+    // Optional caps (only if these columns exist)
+    setIf('daily_booking_limit',        body.daily_booking_limit);
+    setIf('monthly_booking_limit',      body.monthly_booking_limit);
+    setIf('expected_bookings_per_day',  body.expected_bookings_per_day);
+
+    if (!sets.length) {
+      return res.status(400).json({ ok: false, error: 'no_updatable_fields_found_for_current_schema' });
+    }
 
     vals.push(id);
+    await db.query(`UPDATE organizations SET ${sets.join(', ')} WHERE id = ?`, vals);
 
-    const sql = `UPDATE organizations SET ${fields.join(', ')} WHERE id = ?`;
-    await db.query(sql, vals);
-
-    const [rows] = await db.query(
-      `SELECT id, name,
-              plan_mode, trial_starts_at, trial_ends_at,
-              messaging_option,
-              users_limit, daily_booking_limit, monthly_booking_limit,
-              expected_bookings_per_day
-         FROM organizations WHERE id = ?`, [id]
-    );
-    res.json({ ok: true, limits: rows[0] });
-  } catch (e) { next(e); }
+    const [rows] = await db.query(`SELECT * FROM organizations WHERE id = ?`, [id]);
+    res.json({ ok: true, limits: rows[0] || null });
+  } catch (err) { next(err); }
 });
 
-/* ----------------------------------------------------
- * PUT /organizations/:id/banner-url
- * JSON: { org_banner_url?, banner_url?, google_map_url?, lat?, lng? }
- * -------------------------------------------------- */
-router.put('/:id/banner-url', requireAuth, async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const { org_banner_url, banner_url, google_map_url, lat, lng } = req.body || {};
-    await db.query(
-      `UPDATE organizations
-          SET org_banner_url = COALESCE(?, org_banner_url),
-              banner_url     = COALESCE(?, banner_url),
-              google_map_url = COALESCE(?, google_map_url),
-              lat            = COALESCE(?, lat),
-              lng            = COALESCE(?, lng)
-        WHERE id = ?`,
-      [org_banner_url || null, banner_url || null, google_map_url || null, lat || null, lng || null, id]
-    );
-    res.json({ ok: true });
-  } catch (e) { next(e); }
-});
-
-/* ----------------------------------------------------
- * PUT /organizations/:id/banner
- * form-data: banner (file)
- * -------------------------------------------------- */
-router.put('/:id/banner', requireAuth, upload.single('banner'), async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    if (!req.file) return res.status(400).json({ ok: false, error: 'file_required' });
-
-    const rel = `/uploads/${req.file.filename}`;
-    const url =
-      process.env.APP_PUBLIC_BASE_URL
-        ? `${process.env.APP_PUBLIC_BASE_URL}${rel}`
-        : rel;
-
-    await db.query(`UPDATE organizations SET org_banner_url = ? WHERE id = ?`, [url, id]);
-    res.json({ ok: true, url });
-  } catch (e) { next(e); }
-});
-
-/* ----------------------------------------------------
- * POST /organizations/:id/map
- * Body: { google_map_url, lat?, lng? }
- * -------------------------------------------------- */
-router.post('/:id/map', requireAuth, async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const { google_map_url, lat, lng } = req.body || {};
-    await db.query(
-      `UPDATE organizations
-          SET google_map_url = COALESCE(?, google_map_url),
-              lat            = COALESCE(?, lat),
-              lng            = COALESCE(?, lng)
-        WHERE id = ?`,
-      [google_map_url || null, lat || null, lng || null, id]
-    );
-    res.json({ ok: true });
-  } catch (e) { next(e); }
-});
-
-// Support both CommonJS default + named loading
 module.exports = router;
 module.exports.default = router;
 
