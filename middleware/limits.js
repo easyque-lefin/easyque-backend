@@ -1,97 +1,48 @@
-// middleware/limits.js
-// Trial (7 days) & booking limit enforcement (daily/monthly)
+import { pool } from './db.js';
 
-const db = require('../services/db');
-
-/** Helper: return org row */
-async function getOrg(org_id) {
-  const [rows] = await db.query(`SELECT * FROM organizations WHERE id = ? LIMIT 1`, [org_id]);
-  return rows[0] || null;
-}
-
-/** Days difference (UTC date milliseconds) */
-function daysBetween(a, b) {
-  const MS = 24 * 60 * 60 * 1000;
-  return Math.floor((b - a) / MS);
-}
-
-/** Enforce trial expiry on login and booking create (as needed) */
-async function trialGuard(req, res, next) {
+export async function enforceOrgLimits(req, res, next) {
   try {
-    const org_id = Number(req.body.org_id || req.query.org_id || req.params.org_id || 0);
-    if (!org_id) return next(); // some routes may not be org-scoped
-    const org = await getOrg(org_id);
-    if (!org) return res.status(404).json({ ok: false, error: 'Organization not found' });
+    const org_id = Number(req.body?.org_id || req.query?.org_id);
+    if (!org_id) return res.status(400).json({ ok:false, error:'org_id_required' });
 
-    if (org.trial_started_at && !org.is_paid) {
-      const started = new Date(org.trial_started_at).getTime();
-      const now = Date.now();
-      const days = daysBetween(started, now);
-      if (days >= 7) {
-        return res.status(403).json({
-          ok: false,
-          error: 'Your free trial is over, please sign up now to continue using our service.'
-        });
-      }
-    }
-    next();
-  } catch (e) { next(e); }
-}
-
-/** Enforce booking limits based on org settings */
-async function bookingLimitsGuard(req, res, next) {
-  try {
-    const { org_id } = req.body;
-    if (!org_id) return res.status(400).json({ ok: false, error: 'org_id required' });
-    const org = await getOrg(org_id);
-    if (!org) return res.status(404).json({ ok: false, error: 'Organization not found' });
-
-    // If org is unpaid after trial, block
-    if (!org.is_paid && org.trial_started_at) {
-      const started = new Date(org.trial_started_at).getTime();
-      if (daysBetween(started, Date.now()) >= 7) {
-        return res.status(403).json({
-          ok: false,
-          error: 'Your free trial is over, please sign up now to continue using our service.'
-        });
-      }
-    }
-
-    const perDay = Number(org.expected_bookings_per_day || 0);
-    const perMonth = Number(org.monthly_expected_bookings || (perDay ? perDay * 30 : 0));
-
-    if (!perDay) return next(); // not configured => no limit
-
-    // Count today for this org (local day in IST—approx via server date)
-    const [todayRows] = await db.query(
-      `SELECT COUNT(*) AS c FROM bookings WHERE org_id = ? AND DATE(booking_date) = CURDATE()`,
-      [org_id]
+    const [[org]] = await pool.query(
+      `SELECT plan_mode, trial_starts_at, trial_ends_at,
+              daily_booking_limit, monthly_booking_limit
+         FROM organizations WHERE id=?`, [org_id]
     );
-    const today = Number(todayRows[0]?.c || 0);
-    if (today >= perDay) {
-      return res.status(429).json({
-        ok: false,
-        error: 'Your booking limit is over as per your current plan, kindly contact EasyQue team for an upgrade.'
-      });
+    if (!org) return res.status(404).json({ ok:false, error:'org_not_found' });
+
+    // Trial check
+    if (org.plan_mode === 'trial' && org.trial_ends_at) {
+      const now = new Date();
+      if (now > new Date(org.trial_ends_at)) {
+        return res.status(402).json({ ok:false, error:'trial_expired', message:'Trial ended. Please upgrade plan.' });
+      }
     }
 
-    // Count month
-    if (perMonth) {
-      const [mRows] = await db.query(
-        `SELECT COUNT(*) AS c FROM bookings WHERE org_id = ? AND DATE_FORMAT(booking_date,'%Y-%m') = DATE_FORMAT(CURDATE(),'%Y-%m')`,
-        [org_id]
+    // Daily/monthly booking count checks (only for POST /bookings)
+    if (req.method === 'POST' && req.path === '/bookings') {
+      const [[counts]] = await pool.query(
+        `SELECT
+            SUM(DATE(booking_date)=CURRENT_DATE()) AS today_count,
+            SUM(DATE_FORMAT(booking_date,'%Y-%m')=DATE_FORMAT(CURRENT_DATE(),'%Y-%m')) AS month_count
+         FROM bookings WHERE org_id=?`, [org_id]
       );
-      const m = Number(mRows[0]?.c || 0);
-      if (m >= perMonth) {
-        return res.status(429).json({
-          ok: false,
-          error: 'Your booking limit is over as per your current plan, kindly contact EasyQue team for an upgrade.'
-        });
+      const today = Number(counts.today_count || 0);
+      const month = Number(counts.month_count || 0);
+
+      if (org.daily_booking_limit != null && today >= org.daily_booking_limit) {
+        return res.status(429).json({ ok:false, error:'daily_limit_reached' });
+      }
+      if (org.monthly_booking_limit != null && month >= org.monthly_booking_limit) {
+        return res.status(429).json({ ok:false, error:'monthly_limit_reached' });
       }
     }
 
     next();
-  } catch (e) { next(e); }
+  } catch (e) {
+    console.error('enforceOrgLimits error', e);
+    res.status(500).json({ ok:false, error:'limits_check_failed' });
+  }
 }
 
-module.exports = { trialGuard, bookingLimitsGuard };
