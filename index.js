@@ -63,6 +63,7 @@ app.use('/auth',        loadRouter('./routes/auth', 'auth'));
 app.use('/users',       loadRouter('./routes/users', 'users'));
 app.use('/bookings',    loadRouter('./routes/bookings', 'bookings'));
 app.use('/orgs',        loadRouter('./routes/orgs', 'orgs'));
+app.use(require('./routes/org_limits.cjs'));
 
 // Some repos also have /organizations (legacy name)
 app.use('/organizations', loadRouter('./routes/organizations', 'organizations'));
@@ -129,4 +130,3 @@ try { require('./services/billingScheduler').start(); } catch { console.warn('Bi
 server.listen(PORT, () => {
   console.log(`EasyQue backend running on http://localhost:${PORT}`);
 });
-
