@@ -63,7 +63,15 @@ app.use('/auth',        loadRouter('./routes/auth', 'auth'));
 app.use('/users',       loadRouter('./routes/users', 'users'));
 app.use('/bookings',    loadRouter('./routes/bookings', 'bookings'));
 app.use('/orgs',        loadRouter('./routes/orgs', 'orgs'));
+// Mount existing routes first (keep yours):
+app.use(require('./routes/auth.cjs'));
+app.use(require('./routes/status.cjs'));
+app.use(require('./routes/reviews.cjs'));
+app.use(require('./routes/bookings.cjs'));   // <-- we’ll replace this file below
+
+// NEW: mount limits router (this enables /organizations/:id/limits)
 app.use(require('./routes/org_limits.cjs'));
+
 
 // Some repos also have /organizations (legacy name)
 app.use('/organizations', loadRouter('./routes/organizations', 'organizations'));
