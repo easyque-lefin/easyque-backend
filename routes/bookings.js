@@ -64,6 +64,16 @@ async function nextTokenForDay(conn, tableCols, org_id, assigned_user_id, bookin
   return num(rows[0]?.max_tok, 0) + 1;
 }
 
+import { enforceOrgLimits } from '../lib/limits.js';
+
+// ...
+
+router.post('/bookings', requireAuth, enforceOrgLimits, async (req, res) => {
+  // ... your existing create code
+});
+
+
+
 /* ------------------------------------------------------------------ */
 /* Create booking                                                      */
 /* ------------------------------------------------------------------ */
@@ -365,3 +375,4 @@ router.put('/:id', async (req, res, next) => {
 });
 
 module.exports = router;
+
