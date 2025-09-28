@@ -67,4 +67,29 @@ router.post('/', async (req, res) => {
   }
 });
 
+// routes/organizations.js  (example)
+router.post('/:orgId/limits', async (req, res) => {
+  const orgId = req.params.orgId;
+  const {
+    plan_mode,          // 'trial' | 'paid'
+    trial_days,         // 7
+    messaging_option,   // 'option1' | 'option2'
+    users_limit,        // integer
+    expected_bookings_per_day // integer
+  } = req.body;
+
+  // TODO: persist into organizations table or a new org_limits table
+  // Example SQL (pseudo; adjust to your schema):
+  // await db.query(`
+  //   UPDATE organizations
+  //   SET plan_mode=?, users_limit=?, expected_bookings_per_day=?, trial_ends_at = (CASE WHEN ?='trial' THEN DATE_ADD(NOW(), INTERVAL ? DAY) ELSE NULL END),
+  //       messaging_option=?
+  //   WHERE id=?`,
+  //   [plan_mode, users_limit, expected_bookings_per_day, plan_mode, trial_days || 0, messaging_option, orgId]
+  // );
+
+  return res.json({ ok: true, org_id: Number(orgId) });
+});
+
+
 module.exports = router;
