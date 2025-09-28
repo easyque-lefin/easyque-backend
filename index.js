@@ -1,9 +1,9 @@
 // index.js — EasyQue backend entry
-// - Robust router loader (handles module.exports, exports.router, or default export)
+// - Robust router loader (handles module.exports and default export)
 // - Serves /public and /uploads
 // - CORS for localhost + your subdomains
 // - Health endpoint
-// - Auto-frees the port (Windows/macOS/Linux) if it's already in use, then retries
+// - Auto-frees the port if it's already in use, then retries
 
 require('dotenv').config();
 const express = require('express');
@@ -15,13 +15,9 @@ const { exec } = require('child_process');
 const app = express();
 const server = http.createServer(app);
 
-// ---------- Middleware
+// ---------- Body parsers (before routes)
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
-
-// index.js (or your main server file)
-app.use('/organizations', require('./routes/organizations'));  // required for /organizations/*
-app.use('/orgs',          require('./routes/organizations'));  // safe alias for /orgs/* (optional but handy)
 
 // ---------- CORS
 const CORS_ORIGINS = (process.env.CORS_ORIGINS ||
@@ -41,54 +37,40 @@ app.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOStrin
 
 // ---------- Helper: safe route loader
 function loadRouter(modulePath, name) {
-  let mod;
   try {
-    mod = require(modulePath);
+    const mod = require(modulePath);
+    // Express routers are functions (middleware). Some bundlers export under .default.
+    const candidate =
+      (typeof mod === 'function') ? mod :
+      (mod && typeof mod.default === 'function') ? mod.default :
+      null;
+
+    if (!candidate) {
+      console.error(`⚠️  Route "${name}" misconfigured at ${modulePath}. Export a router function.`);
+      return (_req, res) => res.status(500).json({ ok: false, error: `Route "${name}" misconfigured` });
+    }
+    return candidate;
   } catch (e) {
-    console.warn(`⚠️  Route "${name}" not found at ${modulePath} (skipping).`);
-    // Return a harmless handler so app keeps running
+    console.warn(`⚠️  Route "${name}" not found at ${modulePath} (skipping).`, e.message);
     return (_req, res) => res.status(501).json({ ok: false, error: `Route "${name}" not installed` });
   }
-  const candidate =
-    (typeof mod === 'function') ? mod :
-    (mod && typeof mod.router === 'function') ? mod.router :
-    (mod && typeof mod.default === 'function') ? mod.default :
-    null;
-
-  if (!candidate) {
-    console.error(`⚠️  Route "${name}" misconfigured. Export a router function. Got:`, mod && Object.keys(mod));
-    return (_req, res) => res.status(500).json({ ok: false, error: `Route "${name}" misconfigured` });
-  }
-  return candidate;
 }
 
-// ---------- Routes
-app.use('/auth',        loadRouter('./routes/auth', 'auth'));
-app.use('/users',       loadRouter('./routes/users', 'users'));
-app.use('/bookings',    loadRouter('./routes/bookings', 'bookings'));
-app.use('/orgs',        loadRouter('./routes/orgs', 'orgs'));
-// Mount existing routes first (keep yours):
-app.use(require('./routes/auth.cjs'));
-app.use(require('./routes/status.cjs'));
-app.use(require('./routes/reviews.cjs'));
-app.use(require('./routes/bookings.cjs'));   // <-- we’ll replace this file below
+// ---------- Routes (mount everything via loadRouter)
+app.use('/auth',          loadRouter('./routes/auth', 'auth'));
+app.use('/users',         loadRouter('./routes/users', 'users'));
+app.use('/bookings',      loadRouter('./routes/bookings', 'bookings'));
 
-// NEW: mount limits router (this enables /organizations/:id/limits)
-app.use(require('./routes/org_limits.cjs'));
-
-
-// Some repos also have /organizations (legacy name)
+// Organizations: mount BOTH paths to the same file
 app.use('/organizations', loadRouter('./routes/organizations', 'organizations'));
+app.use('/orgs',          loadRouter('./routes/organizations', 'organizations')); // alias
 
-// Payments / Billing (present in your repo)
-app.use('/payments',    loadRouter('./routes/payments', 'payments'));
-app.use('/billing',     loadRouter('./routes/billing', 'billing'));
+app.use('/payments',      loadRouter('./routes/payments', 'payments'));
+app.use('/billing',       loadRouter('./routes/billing', 'billing'));
+app.use('/status',        loadRouter('./routes/status', 'status'));
+app.use('/reviews',       loadRouter('./routes/reviews', 'reviews'));
 
-// New routes we added for live status + reviews
-app.use('/status',      loadRouter('./routes/status', 'status'));
-app.use('/reviews',     loadRouter('./routes/reviews', 'reviews'));
-
-// Root -> login page
+// Root -> login page (optional)
 app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 // ---------- Error handler
@@ -105,7 +87,6 @@ function freePortAndRetry() {
   console.error(`\n⚠️  Port ${PORT} is in use. Trying to free it...`);
   const isWin = process.platform === 'win32';
 
-  // Windows kills all PIDs bound to the port; *nix uses lsof
   const cmdWin = `for /f "tokens=5" %a in ('netstat -ano ^| findstr :${PORT}') do taskkill /F /PID %a`;
   const cmdNix = `pid=$(lsof -t -i:${PORT} -sTCP:LISTEN 2>/dev/null); if [ -n "$pid" ]; then kill -9 $pid; fi`;
 
@@ -138,8 +119,8 @@ server.on('error', (err) => {
 // Start daily billing scheduler (02:00 run)
 try { require('./services/billingScheduler').start(); } catch { console.warn('BillingScheduler not started'); }
 
-
 server.listen(PORT, () => {
   console.log(`EasyQue backend running on http://localhost:${PORT}`);
 });
+
 
