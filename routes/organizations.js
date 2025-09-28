@@ -1,95 +1,122 @@
-// routes/organizations.js
-const express = require('express');
-const db = require('../db');
-const router = express.Router();
+// /routes/organizations.js
+import { Router } from 'express';
+import { pool } from '../lib/db.js';
+import { requireAuth } from '../lib/auth.js';
+
+const router = Router();
 
 /**
- * GET /organizations?q=...
+ * PUT /organizations/:id/banner
+ * Body: { org_banner_url?, banner_url?, google_map_url?, lat?, lng? }
  */
-router.get('/', async (req, res) => {
-  try {
-    const q = (req.query.q || '').trim();
-    let rows;
-    if (q) {
-      const maybeId = Number(q);
-      if (!Number.isNaN(maybeId) && String(maybeId) === q) {
-        rows = await db.query('SELECT id, name, slug FROM organizations WHERE id = ? LIMIT 50', [maybeId]);
-      } else {
-        rows = await db.query('SELECT id, name, slug FROM organizations WHERE name LIKE ? LIMIT 200', [`%${q}%`]);
-      }
-    } else {
-      rows = await db.query('SELECT id, name, slug FROM organizations ORDER BY id DESC LIMIT 200');
-    }
-    return res.json({ ok: true, organizations: Array.isArray(rows) ? rows : [] });
-  } catch (err) {
-    console.error('GET /organizations error', err && err.stack ? err.stack : err);
-    return res.status(500).json({ ok: false, error: 'server error' });
-  }
+router.put('/organizations/:id/banner', requireAuth, async (req, res) => {
+  const { id } = req.params;
+  const { org_banner_url, banner_url, google_map_url, lat, lng } = req.body || {};
+  await pool.query(
+    `UPDATE organizations
+       SET org_banner_url = COALESCE(?, org_banner_url),
+           banner_url     = COALESCE(?, banner_url),
+           google_map_url = COALESCE(?, google_map_url),
+           lat            = COALESCE(?, lat),
+           lng            = COALESCE(?, lng)
+     WHERE id=?`,
+    [org_banner_url || null, banner_url || null, google_map_url || null, lat || null, lng || null, id]
+  );
+  res.json({ ok: true });
 });
 
 /**
- * GET /organizations/:id
+ * GET /organizations/:id/limits
+ * Returns current plan & caps.
  */
-router.get('/:id', async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    if (Number.isNaN(id)) return res.status(400).json({ ok: false, error: 'invalid id' });
-    const rows = await db.query('SELECT id, name, slug, created_at FROM organizations WHERE id = ? LIMIT 1', [id]);
-    const org = Array.isArray(rows) && rows.length ? rows[0] : null;
-    if (!org) return res.status(404).json({ ok: false, error: 'organization not found' });
-
-    const deps = await db.query('SELECT id, name FROM departments WHERE org_id = ? ORDER BY id', [id]);
-    const users = await db.query('SELECT id, name, email, role FROM users WHERE org_id = ? ORDER BY id', [id]);
-
-    return res.json({ ok: true, org, departments: Array.isArray(deps) ? deps : [], users: Array.isArray(users) ? users : [] });
-  } catch (err) {
-    console.error('GET /organizations/:id error', err && err.stack ? err.stack : err);
-    return res.status(500).json({ ok: false, error: 'server error' });
-  }
+router.get('/organizations/:id/limits', requireAuth, async (req, res) => {
+  const { id } = req.params;
+  const [[org]] = await pool.query(
+    `SELECT id, name,
+            plan_mode, trial_starts_at, trial_ends_at,
+            messaging_option,
+            users_limit, daily_booking_limit, monthly_booking_limit,
+            expected_bookings_per_day
+       FROM organizations WHERE id=?`, [id]
+  );
+  if (!org) return res.status(404).json({ ok:false, error:'org_not_found' });
+  res.json({ ok:true, limits: org });
 });
 
 /**
- * POST /organizations  (create)
- * body: { name, slug }
+ * POST /organizations/:id/limits
+ * Body:
+ * {
+ *   plan_mode: 'trial' | 'paid',
+ *   trial_days?: number (default 7),
+ *   messaging_option: 'option1' | 'option2',
+ *   users_limit?: number,
+ *   daily_booking_limit?: number,
+ *   monthly_booking_limit?: number,
+ *   expected_bookings_per_day?: number
+ * }
  */
-router.post('/', async (req, res) => {
-  try {
-    const { name, slug } = req.body || {};
-    if (!name) return res.status(400).json({ ok: false, error: 'name required' });
-
-    const insert = await db.query('INSERT INTO organizations (name, slug, created_at, updated_at) VALUES (?, ?, NOW(), NOW())', [name, slug || null]);
-    const id = insert && (insert.insertId || (Array.isArray(insert) && insert[0] && insert[0].insertId)) ? (insert.insertId || insert[0].insertId) : null;
-    const rows = await db.query('SELECT id, name, slug FROM organizations WHERE id = ? LIMIT 1', [id]);
-    return res.status(201).json({ ok: true, org: Array.isArray(rows) ? rows[0] : null });
-  } catch (err) {
-    console.error('POST /organizations error', err && err.stack ? err.stack : err);
-    return res.status(500).json({ ok: false, error: 'server error' });
-  }
-});
-
-// routes/organizations.js  (example)
-router.post('/:orgId/limits', async (req, res) => {
-  const orgId = req.params.orgId;
+router.post('/organizations/:id/limits', requireAuth, async (req, res) => {
+  const { id } = req.params;
   const {
-    plan_mode,          // 'trial' | 'paid'
-    trial_days,         // 7
-    messaging_option,   // 'option1' | 'option2'
-    users_limit,        // integer
-    expected_bookings_per_day // integer
-  } = req.body;
+    plan_mode,                 // 'trial' | 'paid'
+    trial_days = 7,            // defaults to 7
+    messaging_option,          // 'option1' | 'option2'
+    users_limit,
+    daily_booking_limit,
+    monthly_booking_limit,
+    expected_bookings_per_day
+  } = req.body || {};
 
-  // TODO: persist into organizations table or a new org_limits table
-  // Example SQL (pseudo; adjust to your schema):
-  // await db.query(`
-  //   UPDATE organizations
-  //   SET plan_mode=?, users_limit=?, expected_bookings_per_day=?, trial_ends_at = (CASE WHEN ?='trial' THEN DATE_ADD(NOW(), INTERVAL ? DAY) ELSE NULL END),
-  //       messaging_option=?
-  //   WHERE id=?`,
-  //   [plan_mode, users_limit, expected_bookings_per_day, plan_mode, trial_days || 0, messaging_option, orgId]
-  // );
+  // Validate minimal inputs
+  if (!plan_mode || !['trial','paid'].includes(plan_mode)) {
+    return res.status(400).json({ ok:false, error:'invalid_plan_mode' });
+  }
+  if (messaging_option && !['option1','option2'].includes(messaging_option)) {
+    return res.status(400).json({ ok:false, error:'invalid_messaging_option' });
+  }
 
-  return res.json({ ok: true, org_id: Number(orgId) });
+  // Compute trial dates if needed
+  let trialStarts = null;
+  let trialEnds = null;
+  if (plan_mode === 'trial') {
+    const [[nowRow]] = await pool.query('SELECT NOW() AS now');
+    const now = new Date(nowRow.now);
+    trialStarts = now;
+    trialEnds = new Date(now.getTime() + (Number(trial_days || 7) * 24 * 60 * 60 * 1000));
+  }
+
+  // Build dynamic update
+  const fields = ['plan_mode = ?'];
+  const vals = [plan_mode];
+
+  if (plan_mode === 'trial') {
+    fields.push('trial_starts_at = ?', 'trial_ends_at = ?');
+    vals.push(trialStarts, trialEnds);
+  } else {
+    // clear trial when switching to paid
+    fields.push('trial_starts_at = NULL', 'trial_ends_at = NULL');
+  }
+
+  if (messaging_option) { fields.push('messaging_option = ?'); vals.push(messaging_option); }
+  if (users_limit != null) { fields.push('users_limit = ?'); vals.push(Number(users_limit)); }
+  if (daily_booking_limit != null) { fields.push('daily_booking_limit = ?'); vals.push(Number(daily_booking_limit)); }
+  if (monthly_booking_limit != null) { fields.push('monthly_booking_limit = ?'); vals.push(Number(monthly_booking_limit)); }
+  if (expected_bookings_per_day != null) { fields.push('expected_bookings_per_day = ?'); vals.push(Number(expected_bookings_per_day)); }
+
+  vals.push(id);
+
+  const sql = `UPDATE organizations SET ${fields.join(', ')} WHERE id = ?`;
+  await pool.query(sql, vals);
+
+  // Return the saved values
+  const [[org]] = await pool.query(
+    `SELECT id, name, plan_mode, trial_starts_at, trial_ends_at,
+            messaging_option, users_limit, daily_booking_limit, monthly_booking_limit,
+            expected_bookings_per_day
+       FROM organizations WHERE id=?`, [id]
+  );
+  res.json({ ok:true, limits: org });
 });
 
-
-module.exports = router;
+export default router;
