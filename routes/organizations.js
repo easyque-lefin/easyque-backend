@@ -1,24 +1,22 @@
 // routes/organizations.js
 // Organization settings: limits (trial/paid + caps), banner (url or upload), map.
-//
-// CommonJS style. Uses services/db and middleware/auth (requireAuth).
-// Mounted at /organizations in index.js.
+// CommonJS. Uses services/db and middleware/auth (requireAuth).
 
 const express = require('express');
-const router = express.Router();
 const path = require('path');
-const fs = require('fs');
 const multer = require('multer');
 
+const router = express.Router();
 const db = require('../services/db');
 const { requireAuth } = require('../middleware/auth');
 
+// Disk upload for banner (optional)
 const upload = multer({ dest: path.join(__dirname, '..', 'uploads') });
 
-/* ----------------------------------------
+/* ----------------------------------------------------
  * GET /organizations/:id
  * Basic org details
- * -------------------------------------- */
+ * -------------------------------------------------- */
 router.get('/:id', requireAuth, async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -35,10 +33,10 @@ router.get('/:id', requireAuth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-/* ----------------------------------------
+/* ----------------------------------------------------
  * GET /organizations/:id/limits
  * Read limits and plan info
- * -------------------------------------- */
+ * -------------------------------------------------- */
 router.get('/:id/limits', requireAuth, async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -55,7 +53,7 @@ router.get('/:id/limits', requireAuth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-/* ----------------------------------------
+/* ----------------------------------------------------
  * POST /organizations/:id/limits
  * Body:
  * {
@@ -67,7 +65,7 @@ router.get('/:id/limits', requireAuth, async (req, res, next) => {
  *   monthly_booking_limit?: number,
  *   expected_bookings_per_day?: number
  * }
- * -------------------------------------- */
+ * -------------------------------------------------- */
 router.post('/:id/limits', requireAuth, async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -88,7 +86,7 @@ router.post('/:id/limits', requireAuth, async (req, res, next) => {
       return res.status(400).json({ ok: false, error: 'invalid_messaging_option' });
     }
 
-    // If trial, compute trial window
+    // Compute trial window if trial mode
     let trialStarts = null, trialEnds = null;
     if (plan_mode === 'trial') {
       const [nowRows] = await db.query('SELECT NOW() AS now');
@@ -107,11 +105,11 @@ router.post('/:id/limits', requireAuth, async (req, res, next) => {
       fields.push('trial_starts_at = NULL', 'trial_ends_at = NULL');
     }
 
-    if (messaging_option)              { fields.push('messaging_option = ?');             vals.push(messaging_option); }
-    if (users_limit != null)           { fields.push('users_limit = ?');                  vals.push(Number(users_limit)); }
-    if (daily_booking_limit != null)   { fields.push('daily_booking_limit = ?');          vals.push(Number(daily_booking_limit)); }
-    if (monthly_booking_limit != null) { fields.push('monthly_booking_limit = ?');        vals.push(Number(monthly_booking_limit)); }
-    if (expected_bookings_per_day != null) { fields.push('expected_bookings_per_day = ?'); vals.push(Number(expected_bookings_per_day)); }
+    if (messaging_option)                   { fields.push('messaging_option = ?');             vals.push(messaging_option); }
+    if (typeof users_limit !== 'undefined') { fields.push('users_limit = ?');                  vals.push(Number(users_limit)); }
+    if (typeof daily_booking_limit !== 'undefined')   { fields.push('daily_booking_limit = ?');   vals.push(Number(daily_booking_limit)); }
+    if (typeof monthly_booking_limit !== 'undefined') { fields.push('monthly_booking_limit = ?'); vals.push(Number(monthly_booking_limit)); }
+    if (typeof expected_bookings_per_day !== 'undefined') { fields.push('expected_bookings_per_day = ?'); vals.push(Number(expected_bookings_per_day)); }
 
     vals.push(id);
 
@@ -130,11 +128,10 @@ router.post('/:id/limits', requireAuth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-/* ----------------------------------------
+/* ----------------------------------------------------
  * PUT /organizations/:id/banner-url
- * Body: { org_banner_url?, banner_url?, google_map_url?, lat?, lng? }
- * (Simple URL update, no file upload)
- * -------------------------------------- */
+ * JSON: { org_banner_url?, banner_url?, google_map_url?, lat?, lng? }
+ * -------------------------------------------------- */
 router.put('/:id/banner-url', requireAuth, async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -153,10 +150,10 @@ router.put('/:id/banner-url', requireAuth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-/* ----------------------------------------
+/* ----------------------------------------------------
  * PUT /organizations/:id/banner
- * Upload a banner image file (form-data: banner)
- * -------------------------------------- */
+ * form-data: banner (file)
+ * -------------------------------------------------- */
 router.put('/:id/banner', requireAuth, upload.single('banner'), async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -173,10 +170,10 @@ router.put('/:id/banner', requireAuth, upload.single('banner'), async (req, res,
   } catch (e) { next(e); }
 });
 
-/* ----------------------------------------
+/* ----------------------------------------------------
  * POST /organizations/:id/map
  * Body: { google_map_url, lat?, lng? }
- * -------------------------------------- */
+ * -------------------------------------------------- */
 router.post('/:id/map', requireAuth, async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -193,7 +190,8 @@ router.post('/:id/map', requireAuth, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Support both CommonJS default + named loading
 module.exports = router;
-module.exports = router;
-module.exports.default = router;   // <-- add this line to support loaders that use .default
+module.exports.default = router;
+
 
