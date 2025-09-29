@@ -6,6 +6,7 @@ const router = express.Router();
 const db = require('../services/db');                  // mysql2/promise pool
 const { requireAuth } = require('../middleware/auth'); // your existing auth middleware
 const { enforceOrgLimits } = require('../middleware/limits'); // trial/cap enforcement
+router.post('/', requireAuth, enforceOrgLimits, async (req,res,next)=>{ /* your existing code */ });
 
 // In production we want to default to the public status page host:
 const LIVE_BASE_URL =
@@ -377,4 +378,3 @@ router.put('/:id', requireAuth, async (req, res, next) => {
 });
 
 module.exports = router;
-
