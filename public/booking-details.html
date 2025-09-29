@@ -1,0 +1,100 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Booking Details</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 16px; }
+    .row { margin: 8px 0; }
+    label { display:block; font-weight:600; margin-bottom:4px; }
+    input, select, textarea { width:100%; padding:8px; border:1px solid #ddd; border-radius:6px; }
+    .grid { display:grid; gap:12px; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); }
+    .btns { display:flex; gap:10px; margin-top:16px; }
+    button { padding:10px 14px; border:0; border-radius:8px; background:#111; color:#fff; cursor:pointer; }
+    button.secondary { background:#666; }
+  </style>
+</head>
+<body>
+  <h2>Booking Details</h2>
+  <div class="grid">
+    <div class="row">
+      <label>Token Number</label>
+      <input id="token_number" type="number" readonly />
+    </div>
+    <div class="row">
+      <label>User Name</label>
+      <input id="user_name" />
+    </div>
+    <div class="row">
+      <label>User Phone</label>
+      <input id="user_phone" />
+    </div>
+    <div class="row">
+      <label>Status</label>
+      <select id="status">
+        <option value="pending">pending</option>
+        <option value="confirmed">confirmed</option>
+        <option value="serving">serving</option>
+        <option value="completed">completed</option>
+        <option value="canceled">canceled</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>Assigned User ID</label>
+      <input id="assigned_user_id" type="number" />
+    </div>
+  </div>
+
+  <div class="btns">
+    <button id="save">Save</button>
+    <button id="cancel" class="secondary">Cancel Booking</button>
+  </div>
+
+  <script>
+    const qs = new URLSearchParams(location.search);
+    const bookingId = Number(qs.get('id') || 0);
+
+    async function load() {
+      const token = localStorage.getItem('token') || '';
+      const res = await fetch(`/bookings?id=${bookingId}`, { headers: { Authorization: `Bearer ${token}` } });
+      const data = await res.json();
+      const row = Array.isArray(data.rows) ? data.rows.find(r => r.id === bookingId) : null;
+      if (!row) return;
+
+      document.getElementById('token_number').value = row.token_number;
+      document.getElementById('user_name').value = row.user_name || '';
+      document.getElementById('user_phone').value = row.user_phone || '';
+      document.getElementById('status').value = row.status || 'pending';
+      document.getElementById('assigned_user_id').value = row.assigned_user_id || '';
+    }
+
+    document.getElementById('save').onclick = async () => {
+      const token = localStorage.getItem('token') || '';
+      const body = {
+        user_name: document.getElementById('user_name').value,
+        user_phone: document.getElementById('user_phone').value,
+        status: document.getElementById('status').value,
+        assigned_user_id: Number(document.getElementById('assigned_user_id').value || 0) || null
+      };
+      await fetch(`/bookings/${bookingId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body)
+      });
+      alert('Saved');
+    };
+
+    document.getElementById('cancel').onclick = async () => {
+      const token = localStorage.getItem('token') || '';
+      await fetch(`/bookings/${bookingId}/cancel`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      alert('Canceled');
+    };
+
+    load();
+  </script>
+</body>
+</html>
