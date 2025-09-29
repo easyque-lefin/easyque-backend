@@ -1,90 +1,58 @@
-// index.js — EasyQue backend entry (clean mount)
-
+// index.js (hardened entry)
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const path = require('path');
 const cors = require('cors');
-const { exec } = require('child_process');
+const helmet = require('helmet');
+const morgan = require('morgan');
+const config = require('./config');
 
 const app = express();
 const server = http.createServer(app);
 
-// ---------- Body parsers
+// Security & logging
+app.use(helmet({ crossOriginResourcePolicy: false }));
+app.use(morgan('combined'));
+
+// CORS
+const corsOrigins = config.corsOrigins.length ? config.corsOrigins : [/\.easyque\.org$/, 'http://localhost:5173'];
+app.use(cors({ origin: corsOrigins, credentials: true }));
+
+// Raw body for Razorpay webhooks BEFORE json parser
+app.use('/webhooks/razorpay', express.raw({ type: '*/*', limit: '2mb' }));
+
+// JSON/body parsers
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// ---------- CORS
-const CORS_ORIGINS = (process.env.CORS_ORIGINS ||
-  'http://localhost:5008,https://api.easyque.org,https://status.easyque.org')
-  .split(',').map(s => s.trim()).filter(Boolean);
-app.use(cors({ origin: CORS_ORIGINS, credentials: true }));
+// Static
+app.use('/public', express.static(path.join(__dirname, 'public'), { maxAge: '1h', etag: true }));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), { maxAge: '1h', etag: true }));
 
-// ---------- Static
-app.use('/public',  express.static(path.join(__dirname, 'public')));
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
-// ---------- Health
-app.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
-
-// ---------- Routes (direct require; all CJS)
-app.use('/auth',          require('./routes/auth'));
-app.use('/',              require('./routes/auth_reset'));          // /auth/request-reset, /auth/reset
-app.use('/users',         require('./routes/users'));
-app.use('/bookings',      require('./routes/bookings'));
-app.use('/bookings',      require('./routes/bookings_export'));     // /bookings/export
+// Routes
+app.use('/auth', require('./routes/auth'));
+app.use('/auth', require('./routes/auth_reset'));
+app.use('/users', require('./routes/users'));
 app.use('/organizations', require('./routes/organizations'));
-app.use('/payments',      require('./routes/payments'));
-app.use('/billing',       require('./routes/billing'));             // if present in your project
-app.use('/status',        require('./routes/status'));
-app.use('/reviews',       require('./routes/reviews'));
-app.use('/',              require('./routes/assigned_metrics'));    // /assigned-metrics/* (break/resume/today)
-app.use('/webhooks',      require('./routes/webhooks'));            // Razorpay webhook
+app.use('/bookings', require('./routes/bookings'));
+app.use('/status', require('./routes/status'));
+app.use('/reviews', require('./routes/reviews'));
+app.use('/payments', require('./routes/payments'));
+app.use('/admin', require('./routes/admin'));
+app.use('/webhooks', require('./routes/webhooks'));
+app.use('/assigned-metrics', require('./routes/assigned_metrics'));
 
-// Root → optional
-app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+// Health
+app.get('/health', (req,res)=>res.json({ ok:true, env: config.env }));
 
-// ---------- Error handler
+// Error handler
 // eslint-disable-next-line no-unused-vars
-app.use((err, _req, res, _next) => {
-  console.error('ERR', err);
-  res.status(err.status || 500).json({ ok: false, error: err.message || 'Server error' });
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ ok:false, error:'server_error', details: err?.message });
 });
 
-// ---------- Listen + auto free port logic
-const PORT = Number(process.env.PORT || 5008);
-
-function freePortAndRetry() {
-  console.error(`\n⚠️  Port ${PORT} is in use. Trying to free it...`);
-  const isWin = process.platform === 'win32';
-  const cmdWin = `for /f "tokens=5" %a in ('netstat -ano ^| findstr :${PORT}') do taskkill /F /PID %a`;
-  const cmdNix = `pid=$(lsof -t -i:${PORT} -sTCP:LISTEN 2>/dev/null); if [ -n "$pid" ]; then kill -9 $pid; fi`;
-  exec(isWin ? `cmd /c "${cmdWin}"` : cmdNix, (error, stdout, stderr) => {
-    if (error) {
-      console.error(`❌ Could not free port ${PORT}: ${error.message}`);
-      process.exit(1);
-    } else {
-      if (stdout) console.log(stdout.trim());
-      if (stderr) console.log(stderr.trim());
-      console.log(`✅ Freed port ${PORT}. Restarting...`);
-      setTimeout(() => {
-        server.listen(PORT, '0.0.0.0', () => {
-          console.log(`EasyQue backend running on http://localhost:${PORT}`);
-        });
-      }, 1200);
-    }
-  });
-}
-
-server.on('error', (err) => {
-  if (err && err.code === 'EADDRINUSE') freePortAndRetry();
-  else { console.error('Server error:', err); process.exit(1); }
-});
-
-// Start billing scheduler (02:00)
-try { require('./services/billingScheduler').start(); } catch { console.warn('BillingScheduler not started'); }
-
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`EasyQue backend running on http://localhost:${PORT}`);
-});
+const PORT = config.port;
+server.listen(PORT, () => console.log(`EasyQue backend running on :${PORT}`));
 
