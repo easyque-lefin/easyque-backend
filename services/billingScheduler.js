@@ -1,81 +1,71 @@
 // services/billingScheduler.js
-// Daily cron: on each org's billing_cycle_day, compute charge based on current fees/settings and create a new order.
+const Razorpay = require('razorpay');
+let db; try { db = require('../services/db'); } catch { db = require('../db'); }
 
-require('dotenv').config();
-const cron = require('node-cron');
-const db = require('./db');
-const { createOrder } = require('./razorpay');
+const rzp = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID || '',
+  key_secret: process.env.RAZORPAY_KEY_SECRET || '',
+});
+const log = (...a)=>console.log('[BillingScheduler]',...a);
+const err = (...a)=>console.error('[BillingScheduler]',...a);
 
-function asNumber(x, def = 0) {
-  const n = Number(x);
-  return Number.isFinite(n) ? n : def;
+async function getCharges(){
+  try{
+    const [rows] = await db.query('SELECT annual_fee, monthly_platform_fee_per_user, message_cost_per_booking FROM app_charges ORDER BY id DESC LIMIT 1');
+    if (rows?.length) return {
+      annual_fee: Number(rows[0].annual_fee)||1000,
+      monthly_platform_fee_per_user: Number(rows[0].monthly_platform_fee_per_user)||150,
+      message_cost_per_booking: Number(rows[0].message_cost_per_booking)||0.5,
+    };
+  }catch(_){}
+  return { annual_fee:1000, monthly_platform_fee_per_user:150, message_cost_per_booking:0.5 };
 }
-
-async function getFees() {
-  const [rows] = await db.query(`SELECT \`key\`, \`value\` FROM fee_settings`);
-  const map = {};
-  for (const r of rows) map[r.key] = r.value;
-  return {
-    annual: asNumber(map['option1.annual_fee'], 0),
-    monthlyPerUser: asNumber(map['option1.monthly_per_user'], 0),
-    msgCost: asNumber(map['option2.message_cost'], 1),
-    taxPct: asNumber(map['tax.percent'], 0)
-  };
+function calcMonthly({ plan_mode, users_count, expected_bookings_per_day }, charges){
+  const users=Math.max(1,Number(users_count)||1);
+  const perDay=Math.max(0,Number(expected_bookings_per_day)||0);
+  if (plan_mode==='semi') return charges.monthly_platform_fee_per_user * users;
+  if (plan_mode==='full') return Math.round(charges.message_cost_per_booking * perDay * 30);
+  return 0;
 }
-
-async function chargeOrg(org) {
-  const fees = await getFees();
-
-  let base = 0;
-  if (org.plan_mode === 'semi') {
-    base = fees.monthlyPerUser * asNumber(org.users_count || 1, 1);
-  } else {
-    const perDay = asNumber(org.expected_bookings_per_day || 0, 0);
-    base = fees.msgCost * (perDay * 30);
+async function updateQty(subId, rupees){
+  const qty = Math.max(1, Math.round(Number(rupees)||1));
+  try{ await rzp.subscriptions.update(subId, { quantity: qty }); return true; }
+  catch(e){ err('update qty failed', subId, e?.error || e?.message || e); return false; }
+}
+async function runOnce() {
+  const charges = await getCharges();
+  const [rows] = await db.query(`
+    SELECT o.id AS org_id, o.plan_mode, COALESCE(o.users_count,1) AS users_count,
+           COALESCE(o.expected_bookings_per_day,80) AS expected_bookings_per_day,
+           b.rzp_subscription_id AS sub_id, b.monthly_amount_paise AS current_paise, b.status
+      FROM organizations o
+      JOIN org_billing b ON b.org_id=o.id
+     WHERE b.rzp_subscription_id IS NOT NULL
+  `);
+  if (!rows.length){ log('no subs'); return; }
+  let upd=0, ok=0, skip=0;
+  for (const r of rows){
+    if (r.plan_mode==='trial' || !r.sub_id){ skip++; continue; }
+    const desired = calcMonthly(
+      { plan_mode:r.plan_mode, users_count:r.users_count, expected_bookings_per_day:r.expected_bookings_per_day },
+      charges
+    );
+    const desiredPaise = Math.max(0, Math.round(desired))*100;
+    if (Math.abs((Number(r.current_paise)||0) - desiredPaise) < 1){ ok++; continue; }
+    const done = await updateQty(r.sub_id, desired);
+    if (done){
+      await db.query('UPDATE org_billing SET monthly_amount_paise=? WHERE org_id=?', [desiredPaise, r.org_id]);
+      upd++;
+    } else skip++;
   }
-  const tax = Math.round((base * fees.taxPct) / 100);
-  const total = base + tax;
-
-  if (total <= 0) return;
-
-  const order = await createOrder({
-    amountPaise: Math.round(total * 100),
-    currency: 'INR',
-    notes: { org_id: String(org.id), reason: 'cycle' }
-  });
-
-  await db.query(
-    `INSERT INTO billing_records (org_id, amount, tax, total, cycle_date, created_at)
-     VALUES (?, ?, ?, ?, CURDATE(), NOW())`,
-    [org.id, base, tax, total]
-  );
-
-  // Mark org paid for ~30 days more (soft notion)
-  await db.query(`UPDATE organizations SET is_paid = 1 WHERE id = ?`, [org.id]);
-
-  return order;
+  log(`reconcile: ok=${ok}, upd=${upd}, skip=${skip}`);
 }
-
-/** Run daily at 02:00 Asia/Kolkata (approx—uses server TZ) */
-function start() {
-  cron.schedule('0 2 * * *', async () => {
-    try {
-      const [orgs] = await db.query(
-        `SELECT id, plan_mode, users_count, expected_bookings_per_day, billing_cycle_day
-         FROM organizations WHERE plan_mode IN ('semi','full') AND billing_cycle_day IS NOT NULL`
-      );
-      const today = new Date().getDate();
-      for (const org of orgs) {
-        if (Number(org.billing_cycle_day) === today) {
-          await chargeOrg(org);
-        }
-      }
-    } catch (e) {
-      console.error('Billing cron error', e);
-    }
-  });
-  console.log('⏰ BillingScheduler: daily 02:00 job registered');
+function msToNext(h=2,m=0,s=0){ const n=new Date(); const t=new Date(n); t.setHours(h,m,s,0); if (t<=n) t.setDate(t.getDate()+1); return t-n; }
+let timer=null;
+function scheduleNext(){
+  const wait=msToNext(2,0,0);
+  log(`next run in ${(wait/60000).toFixed(1)} min`);
+  timer=setTimeout(async()=>{ try{ await runOnce(); }catch(e){ err('run fail', e?.message||e); } finally{ scheduleNext(); } }, wait);
 }
-
-module.exports = { start };
+module.exports = { start(){ setTimeout(()=>{ try{ scheduleNext(); }catch(e){ err('start fail', e?.message||e);} },1500); log('started 02:00 daily'); }, runOnce };
 
