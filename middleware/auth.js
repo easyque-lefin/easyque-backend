@@ -1,28 +1,32 @@
-// middleware/auth.js
+// middleware/auth.js (hardened)
 // JWT verification + role guards
 
 require('dotenv').config();
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'changeme';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET && process.env.NODE_ENV === 'production') {
+  throw new Error('JWT_SECRET is required in production');
+}
 
 function requireAuth(req, res, next) {
   try {
     const h = req.headers.authorization || '';
     const token = h.startsWith('Bearer ') ? h.slice(7) : null;
-    if (!token) return res.status(401).json({ ok: false, error: 'Unauthorized' });
-    const payload = jwt.verify(token, JWT_SECRET);
+    if (!token) return res.status(401).json({ ok: false, error: 'unauthorized' });
+    const payload = jwt.verify(token, JWT_SECRET || 'dev-only');
     req.user = payload;
     next();
-  } catch (e) {
-    return res.status(401).json({ ok: false, error: 'Unauthorized' });
+  } catch (err) {
+    return res.status(401).json({ ok: false, error: 'invalid_token' });
   }
 }
 
 function requireRole(...roles) {
   return (req, res, next) => {
-    const r = (req.user && (req.user.role || req.user.user_role)) || '';
-    if (!roles.includes(r)) return res.status(403).json({ ok: false, error: 'Forbidden' });
+    if (!req.user || !roles.includes(req.user.role)) {
+      return res.status(403).json({ ok: false, error: 'forbidden' });
+    }
     next();
   };
 }
@@ -31,9 +35,10 @@ function requireRole(...roles) {
 function requireSuperAdminEmail(req, res, next) {
   const email = (req.user && req.user.email) || '';
   if (email.toLowerCase() !== 'easyque0@gmail.com') {
-    return res.status(403).json({ ok: false, error: 'Admin only' });
+    return res.status(403).json({ ok: false, error: 'admin_only' });
   }
   next();
 }
 
 module.exports = { requireAuth, requireRole, requireSuperAdminEmail };
+
