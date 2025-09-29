@@ -1,147 +1,199 @@
-// routes/organizations.js
+// routes/organizations.js — aligns with updated schema
+// - Uses organizations.subscription_status
+// - Uses org_billing columns: initial_amount_paise, monthly_amount_paise, initial_paid_at,
+//   rzp_order_id, rzp_payment_id, rzp_subscription_id, status (enum)
+
 const express = require('express');
 const dayjs = require('dayjs');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+
 const db = require('../services/db');
 const { requireAuth } = require('../middleware/auth');
 const { requireAnyRole } = require('../middleware/roles');
 
 const router = express.Router();
 
-/* Uploads */
+/* ---------- uploads (banner/map etc.) ---------- */
 const uploadsDir = path.join(__dirname, '..', 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadsDir),
-  filename: (req, file, cb) => {
-    const id = req.params.id || 'org';
-    const ext = path.extname(file.originalname || '').toLowerCase() || '.jpg';
-    cb(null, `org_${id}_banner_${Date.now()}${ext}`);
+  destination: (_, __, cb) => cb(null, uploadsDir),
+  filename:   (_, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    cb(null, `org_${Date.now()}${ext || '.bin'}`);
   }
 });
 const upload = multer({ storage });
 
-/* Helpers */
-const qCols = `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`;
-async function getCols(table){ const [rows] = await db.query(qCols, [table]); return new Set(rows.map(r=>r.COLUMN_NAME));}
+async function getCols(table) {
+  const [rows] = await db.query(
+    `SELECT column_name FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name = ?`,
+    [table]
+  );
+  return new Set(rows.map(r => String(r.column_name)));
+}
+function num(x, d = 0) { const n = Number(x); return Number.isFinite(n) ? n : d; }
 
-/* CRUD (minimal) */
-router.post('/', requireAuth, requireAnyRole('admin','organization_admin'), async (req,res,next)=>{
-  try{
-    const { name, address, map_url } = req.body || {};
-    const [r] = await db.query(`INSERT INTO organizations (name, google_map_url) VALUES (?,?)`, [name || 'New Org', map_url || null]);
-    res.json({ ok:true, id:r.insertId, org:{ id:r.insertId, name, google_map_url: map_url || null }});
-  }catch(e){ next(e); }
-});
-
+/* ---------- GET /organizations/:id ---------- */
 router.get('/:id', requireAuth, requireAnyRole('admin','organization_admin','receptionist','assigned_user'), async (req,res,next)=>{
   try{
-    const id = Number(req.params.id);
+    const id = num(req.params.id);
     const [rows] = await db.query(`SELECT * FROM organizations WHERE id=?`, [id]);
-    if(!rows.length) return res.status(404).json({ ok:false, error:'org_not_found' });
-    res.json({ ok:true, org: rows[0] });
+    res.json({ ok:true, org: rows[0] || null });
   }catch(e){ next(e); }
 });
 
-/* Limits */
-router.get('/:id/limits', requireAuth, requireAnyRole('admin','organization_admin'), async (req,res,next)=>{
+/* ---------- PATCH /organizations/:id (basic details) ---------- */
+router.patch('/:id', requireAuth, requireAnyRole('admin','organization_admin'), async (req,res,next)=>{
   try{
-    const id = Number(req.params.id);
-    const [rows] = await db.query(`SELECT * FROM organizations WHERE id=?`, [id]);
-    if(!rows.length) return res.status(404).json({ ok:false, error:'org_not_found' });
-    res.json({ ok:true, limits: rows[0] });
-  }catch(e){ next(e); }
-});
-
-router.post('/:id/limits', requireAuth, requireAnyRole('admin','organization_admin'), async (req,res,next)=>{
-  try{
-    const id = Number(req.params.id);
+    const id = num(req.params.id);
     const body = req.body || {};
-    const allowed = new Set(['trial','semi','full']);
-    if (!allowed.has(String(body.plan_mode))) {
-      return res.status(400).json({ ok:false, error:'invalid_plan_mode' });
-    }
-    if (!['option1','option2'].includes(body.messaging_option)) {
-      return res.status(400).json({ ok:false, error:'messaging_option required' });
-    }
-
+    const editable = new Set([
+      'name','location','services','photo',
+      'map_url','google_map_url','google_review_url',
+      'users_limit','users_count',
+      'expected_bookings_per_day','daily_booking_limit','monthly_booking_limit','monthly_expected_bookings',
+      'plan_mode', 'subscription_status', // allowed but validated below
+      'org_banner_url','banner_url'
+    ]);
     const cols = await getCols('organizations');
     const sets = [], vals = [];
-    const setIf = (c,v)=>{ if(cols.has(c) && typeof v!=='undefined'){ sets.push(`${c}=?`); vals.push(v);} };
-    const setNullIf = (c)=>{ if(cols.has(c)){ sets.push(`${c}=NULL`); } };
-    const setNowIf = (c)=>{ if(cols.has(c)){ sets.push(`${c}=NOW()`); } };
 
-    setIf('messaging_option', body.messaging_option);
-    setIf('users_limit', body.users_limit ?? 10);
-    setIf('daily_booking_limit', body.daily_booking_limit ?? 200);
-    setIf('monthly_booking_limit', body.monthly_booking_limit ?? 5000);
-    setIf('expected_bookings_per_day', body.expected_bookings_per_day ?? 80);
+    function setIf(c, v) { if (editable.has(c) && cols.has(c)) { sets.push(`${c}=?`); vals.push(v); } }
 
+    // Guard values
+    if (body.plan_mode && !['trial','semi','full'].includes(String(body.plan_mode))) {
+      return res.status(400).json({ ok:false, error:'invalid_plan_mode' });
+    }
+    if (body.subscription_status && !['active','paused','canceled','past_due', null].includes(body.subscription_status)) {
+      return res.status(400).json({ ok:false, error:'invalid_subscription_status' });
+    }
+
+    for (const [k,v] of Object.entries(body)) setIf(k, v);
+
+    if (!sets.length) return res.json({ ok:true, updated:0 });
+
+    vals.push(id);
+    const [r] = await db.query(`UPDATE organizations SET ${sets.join(', ')} WHERE id=?`, vals);
+    res.json({ ok:true, updated: r.affectedRows || 0 });
+  }catch(e){ next(e); }
+});
+
+/* ---------- POST /organizations/:id/upload (banner/map/review URLs) ---------- */
+router.post('/:id/upload', requireAuth, requireAnyRole('admin','organization_admin'), upload.single('file'), async (req,res,next)=>{
+  try{
+    const id = num(req.params.id);
+    const type = (req.body?.type || '').trim(); // 'banner' | 'photo'
+    if (!req.file) return res.status(400).json({ ok:false, error:'file_required' });
+
+    const url = `/uploads/${req.file.filename}`;
+    let col = null;
+    if (type === 'banner') col = 'org_banner_url';
+    else if (type === 'photo') col = 'photo';
+    else col = 'banner_url';
+
+    const cols = await getCols('organizations');
+    if (!cols.has(col)) return res.status(400).json({ ok:false, error:`column_${col}_missing` });
+
+    await db.query(`UPDATE organizations SET ${col}=? WHERE id=?`, [url, id]);
+    res.json({ ok:true, [col]: url });
+  }catch(e){ next(e); }
+});
+
+/* ---------- POST /organizations/:id/links (map/review urls via JSON) ---------- */
+router.post('/:id/links', requireAuth, requireAnyRole('admin','organization_admin'), async (req,res,next)=>{
+  try{
+    const id = num(req.params.id);
+    const body = req.body || {};
+    const cols = await getCols('organizations');
+    const sets=[], vals=[];
+
+    function setIf(c) { if (body[c] && cols.has(c)) { sets.push(`${c}=?`); vals.push(String(body[c])); } }
+
+    setIf('map_url');
+    setIf('google_map_url');
+    setIf('google_review_url');
+    if (!sets.length) return res.status(400).json({ ok:false, error:'no_valid_fields' });
+    vals.push(id);
+
+    await db.query(`UPDATE organizations SET ${sets.join(', ')} WHERE id=?`, vals);
+    res.json({ ok:true });
+  }catch(e){ next(e); }
+});
+
+/* ---------- POST /organizations/:id/limits (plan & quotas) ---------- */
+router.post('/:id/limits', requireAuth, requireAnyRole('admin','organization_admin'), async (req,res,next)=>{
+  try{
+    const id = num(req.params.id);
+    const body = req.body || {};
+    const allowedPlan = new Set(['trial','semi','full']);
+    if (!allowedPlan.has(String(body.plan_mode))) {
+      return res.status(400).json({ ok:false, error:'invalid_plan_mode' });
+    }
+
+    const orgCols = await getCols('organizations');
+    const sets=[], vals=[];
+    function setIf(c, v) { if (orgCols.has(c)) { sets.push(`${c}=?`); vals.push(v); } }
+    function setNullIf(c){ if (orgCols.has(c)) { sets.push(`${c}=NULL`); } }
+    function setNowIf(c){ if (orgCols.has(c)) { sets.push(`${c}=NOW()`); } }
+
+    // messaging option (if present)
+    if (orgCols.has('messaging_option') && body.messaging_option) {
+      setIf('messaging_option', body.messaging_option);
+    }
+
+    // plan_mode
+    setIf('plan_mode', body.plan_mode);
+
+    // trial handling
     if (body.plan_mode === 'trial') {
-      const days = Number(body.trial_days) || 7;
-      setIf('plan_mode','trial');
+      const days = Math.max(1, Math.min(Number(body.trial_days || 7), 30));
       setNowIf('trial_starts_at');
-      if (cols.has('trial_ends_at')) { sets.push(`trial_ends_at = DATE_ADD(NOW(), INTERVAL ? DAY)`); vals.push(days); }
-      await db.query(
-        `INSERT INTO org_billing (org_id, plan_mode, status)
-           VALUES (?, 'trial', 'trial')
-         ON DUPLICATE KEY UPDATE plan_mode='trial', status='trial'`,
-        [id]
-      );
+      if (orgCols.has('trial_ends_at')) { sets.push(`trial_ends_at = DATE_ADD(NOW(), INTERVAL ? DAY)`); vals.push(days); }
+
+      // seed org_billing status=trial
+      const obCols = await getCols('org_billing');
+      if (obCols.has('org_id')) {
+        const cols = ['org_id'];
+        const qv   = ['?'];
+        const up   = [];
+        const v    = [id];
+
+        if (obCols.has('plan_mode')) { cols.push('plan_mode'); qv.push('?'); v.push('trial'); up.push(`plan_mode=VALUES(plan_mode)`); }
+        if (obCols.has('status'))    { cols.push('status');    qv.push('?'); v.push('trial'); up.push(`status=VALUES(status)`); }
+
+        const sql = `INSERT INTO org_billing (${cols.join(',')}) VALUES (${qv.join(',')})
+                     ON DUPLICATE KEY UPDATE ${up.join(', ')}`;
+        await db.query(sql, v);
+      }
     } else {
-      setIf('plan_mode', body.plan_mode);
+      // switching to semi/full clears trial dates
       setNullIf('trial_starts_at');
       setNullIf('trial_ends_at');
-      await db.query(
-        `INSERT INTO org_billing (org_id, plan_mode, status)
-           VALUES (?, ?, 'none')
-         ON DUPLICATE KEY UPDATE plan_mode=VALUES(plan_mode)`,
-        [id, body.plan_mode]
-      );
+
+      const obCols = await getCols('org_billing');
+      if (obCols.has('org_id')) {
+        const cols = ['org_id'];
+        const qv   = ['?'];
+        const up   = [];
+        const v    = [id];
+
+        if (obCols.has('plan_mode')) { cols.push('plan_mode'); qv.push('?'); v.push(body.plan_mode); up.push(`plan_mode=VALUES(plan_mode)`); }
+        if (obCols.has('status'))    { cols.push('status');    qv.push('?'); v.push('none');         up.push(`status=VALUES(status)`); }
+
+        const sql = `INSERT INTO org_billing (${cols.join(',')}) VALUES (${qv.join(',')})
+                     ON DUPLICATE KEY UPDATE ${up.join(', ')}`;
+        await db.query(sql, v);
+      }
     }
 
     vals.push(id);
     await db.query(`UPDATE organizations SET ${sets.join(', ')} WHERE id = ?`, vals);
     const [rows] = await db.query(`SELECT * FROM organizations WHERE id=?`, [id]);
     res.json({ ok:true, limits: rows[0] || null });
-  }catch(e){ next(e); }
-});
-
-/* Banner URL */
-router.put('/:id/banner-url', requireAuth, requireAnyRole('admin','organization_admin'), async (req,res,next)=>{
-  try{
-    const id = Number(req.params.id);
-    const url = req.body?.org_banner_url || req.body?.banner_url;
-    if (!url) return res.status(400).json({ ok:false, error:'org_banner_url required' });
-    await db.query(`UPDATE organizations SET org_banner_url = ? WHERE id=?`, [url, id]);
-    res.json({ ok:true, org_banner_url: url });
-  }catch(e){ next(e); }
-});
-
-/* Banner upload */
-router.put('/:id/banner',
-  requireAuth, requireAnyRole('admin','organization_admin'), upload.single('banner'),
-  async (req,res,next)=>{
-    try{
-      const id = Number(req.params.id);
-      if (!req.file) return res.status(400).json({ ok:false, error:'file "banner" required' });
-      const publicUrl = `${process.env.APP_URL || 'http://localhost:5008'}/uploads/${path.basename(req.file.path)}`;
-      await db.query(`UPDATE organizations SET org_banner_url = ? WHERE id=?`, [publicUrl, id]);
-      res.json({ ok:true, org_banner_url: publicUrl });
-    }catch(e){ next(e); }
-  }
-);
-
-/* Map setter */
-router.post('/:id/map', requireAuth, requireAnyRole('admin','organization_admin'), async (req,res,next)=>{
-  try{
-    const id = Number(req.params.id);
-    const url = req.body?.google_map_url || req.body?.map_url;
-    if (!url) return res.status(400).json({ ok:false, error:'google_map_url required' });
-    await db.query(`UPDATE organizations SET google_map_url = ? WHERE id=?`, [url, id]);
-    res.json({ ok:true, google_map_url: url });
   }catch(e){ next(e); }
 });
 
