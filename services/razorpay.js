@@ -1,74 +1,33 @@
 // services/razorpay.js
-// Thin wrapper around the Razorpay SDK + helpers for amount calc and order/event persistence.
-
-require('dotenv').config();
 const Razorpay = require('razorpay');
-const crypto = require('crypto');
 const db = require('./db');
 
-const {
-  RAZORPAY_KEY_ID,
-  RAZORPAY_KEY_SECRET,
-  WEBHOOK_SECRET = 'change_me_webhook_secret'
-} = process.env;
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET
+});
 
-if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
-  console.warn('⚠️  Razorpay keys are missing. Payments will not work until you set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in .env');
-}
+/**
+ * Ensure a ₹1 monthly plan exists.
+ * If env RZP_PLAN_1INR_MONTHLY_ID is set, it will be used; else we create one and log the id.
+ */
+async function ensure1InrMonthlyPlan() {
+  if (process.env.RZP_PLAN_1INR_MONTHLY_ID) return process.env.RZP_PLAN_1INR_MONTHLY_ID;
 
-const client = (RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET)
-  ? new Razorpay({ key_id: RAZORPAY_KEY_ID, key_secret: RAZORPAY_KEY_SECRET })
-  : null;
+  // try to find a suitable plan by name
+  const all = await razorpay.plans.all({ count: 100 });
+  const existing = all.items.find(p => p.item?.name === 'EasyQue 1 INR Monthly' && p.period === 'monthly' && p.interval === 1);
+  if (existing) return existing.id;
 
-/** Create a Razorpay order (INR, amount in paise) */
-async function createOrder({ amountPaise, currency = 'INR', receipt, notes = {} }) {
-  if (!client) throw new Error('Razorpay client not configured');
-  const order = await client.orders.create({
-    amount: amountPaise,
-    currency,
-    receipt: receipt || `rcpt_${Date.now()}`,
-    notes
+  const created = await razorpay.plans.create({
+    period: 'monthly',
+    interval: 1,
+    item: { name: 'EasyQue 1 INR Monthly', amount: 100, currency: 'INR' }
   });
-  // persist billing_orders minimal row
-  await db.query(
-    `INSERT INTO billing_orders (order_id, amount_paise, currency, receipt, notes_json, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, NOW())
-     ON DUPLICATE KEY UPDATE amount_paise=VALUES(amount_paise), currency=VALUES(currency),
-     receipt=VALUES(receipt), notes_json=VALUES(notes_json), status=VALUES(status)`,
-    [order.id, order.amount, order.currency, order.receipt, JSON.stringify(order.notes||{}), order.status || 'created']
-  );
-  return order;
+
+  console.log('[Razorpay] created 1 INR monthly plan:', created.id);
+  return created.id;
 }
 
-/** Verify webhook signature; returns boolean */
-function verifyWebhookSignature(payloadRaw, signature) {
-  const hmac = crypto.createHmac('sha256', WEBHOOK_SECRET);
-  hmac.update(payloadRaw);
-  const digest = hmac.digest('hex');
-  return crypto.timingSafeEqual(Buffer.from(digest), Buffer.from(signature || '', 'utf8'));
-}
+module.exports = { razorpay, ensure1InrMonthlyPlan };
 
-/** Store webhook event safely */
-async function recordEvent(event) {
-  const type = event?.event || 'unknown';
-  const orderId = event?.payload?.order?.entity?.id || null;
-  const paymentId = event?.payload?.payment?.entity?.id || null;
-  const subscriptionId = event?.payload?.subscription?.entity?.id || null;
-  await db.query(
-    `INSERT INTO billing_events (event_type, order_id, payment_id, subscription_id, payload_json, created_at)
-     VALUES (?, ?, ?, ?, ?, NOW())`,
-    [type, orderId, paymentId, subscriptionId, JSON.stringify(event)]
-  );
-  // Update order status if available
-  const newStatus = event?.payload?.order?.entity?.status || null;
-  if (orderId && newStatus) {
-    await db.query(`UPDATE billing_orders SET status = ? WHERE order_id = ?`, [newStatus, orderId]);
-  }
-}
-
-module.exports = {
-  client,
-  createOrder,
-  verifyWebhookSignature,
-  recordEvent
-};
