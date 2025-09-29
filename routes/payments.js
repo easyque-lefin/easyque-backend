@@ -1,4 +1,7 @@
-// routes/payments.js
+// routes/payments.js — aligns with updated schema
+// Uses org_billing columns (initial_amount_paise, monthly_amount_paise, initial_paid_at,
+// rzp_order_id, rzp_payment_id, rzp_subscription_id, status) and organizations.subscription_status
+
 const express = require('express');
 const crypto = require('crypto');
 const Razorpay = require('razorpay');
@@ -10,155 +13,161 @@ const rzp = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID || '',
   key_secret: process.env.RAZORPAY_KEY_SECRET || '',
 });
+
 const num = (x,d=0)=>{ const n=Number(x); return Number.isFinite(n)?n:d; };
 
-async function getCharges() {
-  try {
-    const [rows] = await db.query(
-      'SELECT annual_fee, monthly_platform_fee_per_user, message_cost_per_booking FROM app_charges ORDER BY id DESC LIMIT 1'
-    );
-    if (rows && rows.length) {
-      return {
-        annual_fee: num(rows[0].annual_fee, 1000),
-        monthly_platform_fee_per_user: num(rows[0].monthly_platform_fee_per_user, 150),
-        message_cost_per_booking: num(rows[0].message_cost_per_booking, 0.5),
-      };
-    }
-  } catch (_) {}
-  return { annual_fee:1000, monthly_platform_fee_per_user:150, message_cost_per_booking:0.5 };
+async function getCols(table){
+  const [rows]=await db.query(
+    `SELECT column_name FROM information_schema.columns
+     WHERE table_schema = DATABASE() AND table_name=?`, [table]
+  );
+  return new Set(rows.map(r => String(r.column_name)));
 }
 
-async function ensure1InrMonthlyPlan() {
-  if (!ensure1InrMonthlyPlan.cachedPlanId) {
-    try {
-      const plans = await rzp.plans.all({ count: 10 });
-      const found = (plans.items || []).find(p => p.period === 'monthly' && p.interval === 1 && p.item?.amount === 100);
-      if (found) ensure1InrMonthlyPlan.cachedPlanId = found.id;
-    } catch (_) {}
-    if (!ensure1InrMonthlyPlan.cachedPlanId) {
-      const plan = await rzp.plans.create({
-        period:'monthly', interval:1,
-        item:{ name:'EasyQue Monthly (₹1 base)', amount:100, currency:'INR' }
-      });
-      ensure1InrMonthlyPlan.cachedPlanId = plan.id;
-    }
-  }
-  return ensure1InrMonthlyPlan.cachedPlanId;
-}
-
-async function upsertOrgBilling(payload) {
-  const {
-    org_id, plan_mode, initial_amount_paise=null, monthly_amount_paise=null,
-    initial_paid_at=null, rzp_order_id=null, rzp_payment_id=null, rzp_subscription_id=null, status=null
-  } = payload;
-
+/* ---------- Helper: upsert into org_billing only for existing columns ---------- */
+async function upsertOrgBilling(payload){
+  const obCols = await getCols('org_billing');
   const cols=[], vals=[], updates=[];
-  function push(c,v){ if(v!==undefined && v!==null){ cols.push(c); vals.push(v); updates.push(`${c}=VALUES(${c})`);} }
-  push('org_id',org_id); push('plan_mode',plan_mode);
-  push('initial_amount_paise',initial_amount_paise); push('monthly_amount_paise',monthly_amount_paise);
-  push('rzp_order_id',rzp_order_id); push('rzp_payment_id',rzp_payment_id);
-  push('rzp_subscription_id',rzp_subscription_id); push('status',status);
-  if (initial_paid_at){ cols.push('initial_paid_at'); vals.push(initial_paid_at); updates.push('initial_paid_at=VALUES(initial_paid_at)'); }
+  function push(c,v){ if (obCols.has(c) && v!==undefined){ cols.push(c); vals.push(v); updates.push(`${c}=VALUES(${c})`);} }
+
+  push('org_id', payload.org_id);
+  push('plan_mode', payload.plan_mode);
+  push('initial_amount_paise', payload.initial_amount_paise);
+  push('monthly_amount_paise', payload.monthly_amount_paise);
+  push('initial_paid_at', payload.initial_paid_at);
+  push('rzp_order_id', payload.rzp_order_id);
+  push('rzp_payment_id', payload.rzp_payment_id);
+  push('rzp_subscription_id', payload.rzp_subscription_id);
+  push('status', payload.status);
+
   if (!cols.length) return;
   const sql = `INSERT INTO org_billing (${cols.join(',')}) VALUES (${cols.map(()=>'?').join(',')})
                ON DUPLICATE KEY UPDATE ${updates.join(',')}`;
   await db.query(sql, vals);
 }
 
-/* Calc */
-router.post('/calc', async (req,res,next)=>{
+/* ---------- Pricing preview (semi/full) ---------- */
+router.get('/preview', async (req,res,next)=>{
   try{
-    const { mode, users_count=1, expected_bookings_per_day=80 } = req.body || {};
-    if (!['semi','full'].includes(mode)) return res.status(400).json({ ok:false, error:'mode must be "semi"|"full"' });
-    const charges = await getCharges();
-    const users = num(users_count,1);
-    const perDay = num(expected_bookings_per_day,80);
+    const mode = String(req.query.mode || '').toLowerCase(); // 'semi' | 'full'
+    const users = Math.max(1, num(req.query.users_count, 1));
+    const perDay = Math.max(1, num(req.query.expected_bookings_per_day, 80));
 
-    let result={base:0,tax:0,total:0}, fees={};
-    if (mode==='semi'){
-      fees = { annual: charges.annual_fee, monthlyPerUser: charges.monthly_platform_fee_per_user };
-      const base = charges.annual_fee + (charges.monthly_platform_fee_per_user * users);
-      result = { base, tax:0, total: base };
+    // simple example inputs; replace with your fee model if stored elsewhere
+    let fees, result;
+    if (mode === 'full') {
+      // full automation: annual + monthly per user (example numbers; adjust if you store in DB)
+      const annual = 0;                     // use org_billing.amount_plan_paise/option_selected if desired
+      const monthlyPerUser = 0;
+      const base = annual + (monthlyPerUser * users);
+      fees = { annual, monthlyPerUser };
+      result = { base, tax: 0, total: base };
+    } else if (mode === 'semi') {
+      // semi automation: per-booking messaging cost * expected_bookings_per_day * 30
+      const perBooking = 0;
+      const base = Math.round(perBooking * perDay * 30);
+      fees = { perBooking, expected_per_day: perDay };
+      result = { base, tax: 0, total: base };
     } else {
-      const totalMsg = Math.round(charges.message_cost_per_booking * perDay * 30);
-      fees = { perBooking: charges.message_cost_per_booking, expected_per_day: perDay };
-      result = { base: totalMsg, tax:0, total: totalMsg };
+      return res.status(400).json({ ok:false, error:'mode must be "semi"|"full"' });
     }
     res.json({ ok:true, inputs:{ mode, users_count:users, expected_bookings_per_day:perDay }, fees, result });
   }catch(e){ next(e); }
 });
 
-/* Create order (initial payment) */
+/* ---------- Create order for initial payment ---------- */
 router.post('/create-order', async (req,res,next)=>{
   try{
-    const { org_id, amount_in_paise, notes={} } = req.body || {};
-    const orgId = num(org_id), paise = num(amount_in_paise);
-    if (!orgId || paise<=0) return res.status(400).json({ ok:false, error:'org_id and positive amount required' });
+    const orgId = num(req.body.org_id);
+    const paise = num(req.body.amount_paise);
+    const plan_mode = String(req.body.plan_mode || '').toLowerCase(); // 'semi' | 'full'
+    if (!orgId || paise <= 0 || !['semi','full'].includes(plan_mode)) {
+      return res.status(400).json({ ok:false, error:'org_id, amount_paise, plan_mode required' });
+    }
+
     const order = await rzp.orders.create({
-      amount: paise, currency:'INR', receipt:`org_${orgId}_${Date.now()}`, payment_capture:1, notes
+      amount: paise,
+      currency: 'INR',
+      receipt: `org_${orgId}_${Date.now()}`,
+      payment_capture: 1
     });
-    await upsertOrgBilling({ org_id: orgId, initial_amount_paise: paise, rzp_order_id: order.id, status:'pending' });
+
+    await upsertOrgBilling({
+      org_id: orgId,
+      plan_mode,
+      initial_amount_paise: paise,
+      rzp_order_id: order.id,
+      status: 'pending'
+    });
+
     res.json({ ok:true, order });
   }catch(e){ next(e); }
 });
 
-/* Verify (after checkout) */
-router.post('/verify', async (req,res,next)=>{
+/* ---------- Verify payment for initial order ---------- */
+router.post('/verify-order', async (req,res,next)=>{
   try{
-    const { org_id, razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
-    const orgId = num(org_id);
-    if (!orgId || !razorpay_order_id || !razorpay_payment_id || !razorpay_signature)
+    const orgId = num(req.body.org_id);
+    const razorpay_order_id = String(req.body.razorpay_order_id || '');
+    const razorpay_payment_id = String(req.body.razorpay_payment_id || '');
+    const razorpay_signature = String(req.body.razorpay_signature || '');
+    if (!orgId || !razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
       return res.status(400).json({ ok:false, error:'org_id, order_id, payment_id, signature required' });
+    }
 
+    const payload = `${razorpay_order_id}|${razorpay_payment_id}`;
     const h = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET || '');
-    h.update(`${razorpay_order_id}|${razorpay_payment_id}`);
-    if (h.digest('hex') !== razorpay_signature) return res.status(400).json({ ok:false, error:'signature_mismatch' });
+    h.update(payload);
+    if (h.digest('hex') !== razorpay_signature) {
+      return res.status(400).json({ ok:false, error:'signature_mismatch' });
+    }
 
-    const paidAt = new Date();
     await upsertOrgBilling({
-      org_id: orgId, initial_paid_at: paidAt,
-      rzp_order_id: razorpay_order_id, rzp_payment_id: razorpay_payment_id, status:'paid'
+      org_id: orgId,
+      rzp_order_id: razorpay_order_id,
+      rzp_payment_id: razorpay_payment_id,
+      initial_paid_at: new Date(),
+      status: 'paid'
     });
-    res.json({ ok:true, paid_at: paidAt.toISOString() });
+
+    res.json({ ok:true, verified:true });
   }catch(e){ next(e); }
 });
 
-/* Start subscription (autopay begins 30 days after initial) */
-router.post('/start-subscription', async (req,res,next)=>{
+/* ---------- Create subscription (autopay starts after 30 days) ---------- */
+router.post('/create-subscription', async (req,res,next)=>{
   try{
-    const { org_id, plan_mode, users_count=1, expected_bookings_per_day=80, initial_paid_at } = req.body || {};
-    const orgId = num(org_id);
-    if (!orgId || !['semi','full'].includes(plan_mode)) return res.status(400).json({ ok:false, error:'org_id and plan_mode required' });
-    const charges = await getCharges();
+    const orgId = num(req.body.org_id);
+    const plan_mode = String(req.body.plan_mode || '').toLowerCase(); // 'semi' | 'full'
+    const monthly_amount_paise = num(req.body.monthly_amount_paise, 0);
+    if (!orgId || !['semi','full'].includes(plan_mode)) {
+      return res.status(400).json({ ok:false, error:'org_id and plan_mode required' });
+    }
 
-    let monthlyRupees=0;
-    if (plan_mode==='semi') monthlyRupees = num(charges.monthly_platform_fee_per_user,150) * num(users_count,1);
-    else monthlyRupees = Math.round(num(charges.message_cost_per_booking,0.5) * num(expected_bookings_per_day,80) * 30);
-    const monthlyPaise = monthlyRupees * 100;
-
-    const planId = await ensure1InrMonthlyPlan();
-    const baseTs = initial_paid_at ? new Date(initial_paid_at).getTime() : Date.now();
-    const startAtUnix = Math.floor((baseTs + 30*24*60*60*1000) / 1000);
-
+    // create a monthly subscription plan on Razorpay (you might already have a plan_id)
+    // for demo: we create subscription directly with amount charge at cycle
     const sub = await rzp.subscriptions.create({
-      plan_id: planId,
-      quantity: Math.max(1, Math.round(monthlyRupees)),
-      total_count: 0,
-      start_at: startAtUnix,
-      notes: { org_id: String(orgId), plan_mode }
+      plan_id: req.body.plan_id, // if you already provisioned a plan; else set addons/notes accordingly
+      customer_notify: 1,
+      quantity: 1,
+      total_count: 120,
+      notes: { org_id: String(orgId), plan_mode },
+      start_at: Math.floor((Date.now()/1000) + (30*24*60*60)) // starts after ~30 days
     });
 
     await upsertOrgBilling({
-      org_id: orgId, plan_mode, monthly_amount_paise: monthlyPaise,
-      rzp_subscription_id: sub.id, status:'active'
+      org_id: orgId,
+      plan_mode,
+      monthly_amount_paise: monthly_amount_paise || undefined,
+      rzp_subscription_id: sub.id,
+      status: 'active'
     });
 
-    try {
-      await db.query(
-        'UPDATE organizations SET plan_mode=?, users_limit=COALESCE(users_limit, ?), expected_bookings_per_day=COALESCE(expected_bookings_per_day, ?) WHERE id=?',
-        [plan_mode, num(users_count,1), num(expected_bookings_per_day,80), orgId]
-      );
-    } catch {}
+    // Also reflect on organizations.subscription_status if present
+    const orgCols = await getCols('organizations');
+    if (orgCols.has('subscription_status')) {
+      await db.query(`UPDATE organizations SET subscription_status='active' WHERE id=?`, [orgId]);
+    }
 
     res.json({ ok:true, subscription: sub });
   }catch(e){ next(e); }
