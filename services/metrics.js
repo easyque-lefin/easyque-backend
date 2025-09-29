@@ -1,130 +1,65 @@
-// services/metrics.js
-// Live metrics & break logic
-const db = require('../db');
+// services/metrics.js — compute/update now serving; uses token_number
+
+const db = require('./db');
+const dayjs = require('dayjs');
+
+const num = (x, d=0) => { const n = Number(x); return Number.isFinite(n) ? n : d; };
 
 /**
- * Get metrics row for org or assigned user.
- * Uses organizations table for org-level metrics, or assigned_live_metrics for per-doctor metrics.
+ * Set "now serving" token for an org (or per assigned user if needed).
+ * mode: 'org' | 'assigned'
  */
-function pickTarget(orgId, assignedUserId) {
-  if (assignedUserId != null) {
-    return {
-      table: 'assigned_live_metrics',
-      where: 'org_id = ? AND assigned_user_id = ?',
-      args: [orgId, assignedUserId]
-    };
-  }
-  return {
-    table: 'organizations',
-    where: 'id = ?',
-    args: [orgId]
-  };
-}
+async function setNowServing({ org_id, token_number, assigned_user_id = null, mode = 'org' }) {
+  const today = dayjs().format('YYYY-MM-DD');
 
-async function ensureAssignedRow(orgId, assignedUserId) {
-  if (assignedUserId == null) return;
-  const rows = await db.query(
-    `SELECT 1 FROM assigned_live_metrics WHERE org_id = ? AND assigned_user_id = ? LIMIT 1`,
-    [orgId, assignedUserId]
-  );
-  if (!rows.length) {
-    await db.query(
-      `INSERT INTO assigned_live_metrics
-         (org_id, assigned_user_id, now_serving_token, avg_service_seconds)
-       VALUES (?, ?, 0, 0)`,
-      [orgId, assignedUserId]
-    );
-  }
-}
-
-async function getMetrics(orgId, assignedUserId = null) {
-  const t = pickTarget(orgId, assignedUserId);
-  const [row] = await db.query(`SELECT * FROM ${t.table} WHERE ${t.where} LIMIT 1`, t.args);
-  if (!row) return null;
-  return row;
-}
-
-/**
- * Called when a booking is served. Updates now_serving_token, service_start_at (if first),
- * and recomputes avg_service_seconds based on today's served bookings.
- */
-async function onServe(orgId, assignedUserId = null) {
-  await ensureAssignedRow(orgId, assignedUserId);
-
-  // Resolve table
-  const t = pickTarget(orgId, assignedUserId);
-
-  // Compute now_serving as the max served token today in scope
-  const scopeWhere = assignedUserId != null
-    ? `org_id = ? AND assigned_user_id = ?`
-    : `org_id = ? AND assigned_user_id IS NULL`;
-  const scopeArgs = assignedUserId != null ? [orgId, assignedUserId] : [orgId];
-
-  const [cur] = await db.query(
-    `SELECT COALESCE(MAX(token_no),0) AS now_serving
-       FROM bookings
-      WHERE ${scopeWhere}
-        AND DATE(served_at) = CURRENT_DATE()`,
-    scopeArgs
-  );
-  const nowServing = cur?.now_serving || 0;
-
-  // Start time = first served booking time today (if not already set)
-  const [start] = await db.query(
-    `SELECT MIN(served_at) AS first_served
-       FROM bookings
-      WHERE ${scopeWhere}
-        AND DATE(served_at) = CURRENT_DATE()`,
-    scopeArgs
-  );
-  const serviceStartAt = start?.first_served || null;
-
-  // Average service seconds = avg(booked->served) for today's served tokens (proxy)
-  const [avg] = await db.query(
-    `SELECT ROUND(AVG(TIMESTAMPDIFF(SECOND, booking_datetime, served_at))) AS avg_secs
-       FROM bookings
-      WHERE ${scopeWhere}
-        AND served_at IS NOT NULL
-        AND DATE(served_at) = CURRENT_DATE()`,
-    scopeArgs
-  );
-  const avgSecs = avg?.avg_secs || 0;
-
-  // Update metrics row
-  const cols = ['now_serving_token = ?','avg_service_seconds = ?'];
-  const params = [nowServing, avgSecs];
-
-  if (serviceStartAt) {
-    cols.push('service_start_at = IFNULL(service_start_at, ?)');
-    params.push(serviceStartAt);
+  if (mode === 'org' || !assigned_user_id) {
+    await db.query(`UPDATE organizations SET now_serving_token=? WHERE id=?`, [num(token_number,null), org_id]);
+    return;
   }
 
+  // assigned mode
   await db.query(
-    `UPDATE ${t.table}
-        SET ${cols.join(', ')}
-      WHERE ${t.where}`,
-    [...params, ...t.args]
+    `INSERT INTO assigned_live_metrics (org_id, assigned_user_id, booking_date, now_serving_token, updated_at)
+     VALUES (?,?,?,?,NOW())
+     ON DUPLICATE KEY UPDATE now_serving_token=VALUES(now_serving_token), updated_at=NOW()`,
+    [org_id, assigned_user_id, today, num(token_number,null)]
   );
 }
 
-/** ETA helper */
-function etaFor(viewerToken, nowServing, avgSeconds) {
-  const pos = Math.max(0, (viewerToken || 0) - (nowServing || 0));
-  return pos * (avgSeconds || 0);
+/**
+ * Recalculate average service time based on served bookings today.
+ * Requires bookings.served_at and token_number to exist.
+ */
+async function recalcAvgServiceSeconds({ org_id, assigned_user_id = null }) {
+  const today = dayjs().format('YYYY-MM-DD');
+
+  if (assigned_user_id) {
+    const [rows] = await db.query(
+      `SELECT TIMESTAMPDIFF(SECOND, scheduled_at, served_at) AS s
+         FROM bookings
+        WHERE org_id=? AND assigned_user_id=? AND booking_date=? AND served_at IS NOT NULL`,
+      [org_id, assigned_user_id, today]
+    );
+    const avg = rows.length ? Math.round(rows.reduce((a,b)=>a+(b.s||0),0) / rows.length) : null;
+    await db.query(
+      `INSERT INTO assigned_live_metrics (org_id, assigned_user_id, booking_date, avg_service_seconds, updated_at)
+       VALUES (?,?,?,?,NOW())
+       ON DUPLICATE KEY UPDATE avg_service_seconds=VALUES(avg_service_seconds), updated_at=NOW()`,
+      [org_id, assigned_user_id, today, avg]
+    );
+    return avg;
+  }
+
+  const [rows] = await db.query(
+    `SELECT TIMESTAMPDIFF(SECOND, scheduled_at, served_at) AS s
+       FROM bookings
+      WHERE org_id=? AND booking_date=? AND served_at IS NOT NULL`,
+    [org_id, today]
+  );
+  const avg = rows.length ? Math.round(rows.reduce((a,b)=>a+(b.s||0),0) / rows.length) : null;
+  await db.query(`UPDATE organizations SET avg_service_seconds=? WHERE id=?`, [avg, org_id]);
+  return avg;
 }
 
-/** Pretty seconds */
-function secsHuman(s) {
-  s = s || 0;
-  const m = Math.floor(s/60), sec = s%60;
-  if (m <= 0) return `${sec}s`;
-  return `${m}m ${sec}s`;
-}
-
-module.exports = {
-  getMetrics,
-  onServe,
-  etaFor,
-  secsHuman
-};
+module.exports = { setNowServing, recalcAvgServiceSeconds };
 
