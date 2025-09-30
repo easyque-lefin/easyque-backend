@@ -1,36 +1,49 @@
-name: Deploy to Server
+name: Deploy to EasyQue server
 
 on:
   push:
-    branches: [ main ]   # runs every time you push/commit to main
+    branches: [ "main" ]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Copy repo to server
-        uses: easingthemes/ssh-deploy@v4.1.8
-        with:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_KEY }}
-          REMOTE_HOST: ${{ secrets.SSH_HOST }}
-          REMOTE_USER: ${{ secrets.SSH_USER }}
-          TARGET: /opt/easyque-backend.new
-          ARGS: "-rlgoDzvc --delete --exclude node_modules --exclude .env --exclude uploads"
+      - name: Add server to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "$SERVER_IP" >> ~/.ssh/known_hosts
 
-      - name: Swap into place and restart
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          script: |
-            set -e
-            if [ -d /opt/easyque-backend ]; then rm -rf /opt/easyque-backend.bak && mv /opt/easyque-backend /opt/easyque-backend.bak; fi
-            mv /opt/easyque-backend.new /opt/easyque-backend
-            cd /opt/easyque-backend
-            npm ci
-            npm rebuild
-            pm2 restart easyque-backend --update-env
+      - name: Setup SSH key
+        run: |
+          echo "${SSH_KEY}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+      - name: Rsync code to server
+        run: |
+          rsync -avz --delete \
+            --exclude ".git" \
+            -e "ssh -i ~/.ssh/id_rsa" \
+            ./ ${SERVER_USER}@${SERVER_IP}:${PROJECT_PATH}/
+
+      - name: Install deps on server
+        run: |
+          ssh -i ~/.ssh/id_rsa ${SERVER_USER}@${SERVER_IP} <<'EOSSH'
+          set -e
+          cd ${PROJECT_PATH}
+          # Node is already there; install modules and rebuild native deps (bcrypt)
+          npm install --omit=dev
+          npm rebuild bcrypt --build-from-source || true
+          # Restart PM2
+          pm2 restart easyque-backend --update-env || pm2 start index.js --name easyque-backend
+          pm2 save
+          EOSSH
+    env:
+      SERVER_IP: ${{ secrets.SERVER_IP }}
+      SERVER_USER: ${{ secrets.SERVER_USER }}
+      PROJECT_PATH: ${{ secrets.PROJECT_PATH }}
+      SSH_KEY: ${{ secrets.SSH_KEY }}
+
