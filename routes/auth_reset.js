@@ -1,68 +1,102 @@
-// routes/auth_reset.js (fixed)
-// Robust password reset using bcrypt, storing to users.password_hash (not plaintext).
+// routes/auth_reset.js — FULL FILE
+// Password reset flow using users.reset_token & users.reset_token_expiry
 
 const express = require('express');
 const crypto = require('crypto');
-const dayjs = require('dayjs');
-const bcrypt = require('bcrypt');
-const db = require('../services/db');
+const bcrypt = require('bcryptjs');
+const db = require('../db');
 
 const router = express.Router();
 
-/** POST /auth/request-reset { email } */
-router.post('/auth/request-reset', async (req, res, next) => {
-  try {
-    const email = String(req.body?.email || '').trim().toLowerCase();
-    if (!email) return res.status(400).json({ ok:false, error:'email_required' });
+/** helper: normalize DB result to rows */
+async function q(sql, params) {
+  const res = await db.query(sql, params);
+  if (Array.isArray(res)) return res[0] ?? res;   // mysql2 [rows, fields] or [result]
+  return res;                                     // custom wrapper returns rows directly
+}
 
-    const [u] = await db.query(`SELECT id FROM users WHERE email=? LIMIT 1`, [email]);
-    if (!u.length) {
-      // Don't reveal user enumeration
-      return res.json({ ok:true });
+function bad(res, status, details, code = 'bad_request') {
+  return res.status(status).json({ ok: false, error: code, details });
+}
+
+/**
+ * POST /auth/request-reset
+ * Body: { email }
+ * Creates a token valid for 15 minutes and stores it on the user row.
+ */
+router.post('/request-reset', async (req, res) => {
+  try {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    if (!email) return bad(res, 400, 'email is required');
+    // Look up user
+    const rows = await q('SELECT id, email FROM users WHERE email = ? LIMIT 1', [email]);
+    if (!rows || rows.length === 0) {
+      // For privacy, respond 200 even if user does not exist
+      return res.json({ ok: true, requested: true });
     }
 
-    const token = crypto.randomBytes(32).toString('hex');
-    const expiresAt = dayjs().add(1, 'hour').format('YYYY-MM-DD HH:mm:ss');
-
+    const user = rows[0];
+    // Generate secure token
+    const token = crypto.randomBytes(24).toString('hex');
+    // 15 minutes from now
+    const expiryMins = 15;
     await db.query(
-      `INSERT INTO password_reset_tokens (user_id, token, created_at, expires_at, used)
-       VALUES (?,?,?,?,0)`,
-      [u[0].id, token, dayjs().format('YYYY-MM-DD HH:mm:ss'), expiresAt]
+      'UPDATE users SET reset_token = ?, reset_token_expiry = DATE_ADD(NOW(), INTERVAL ? MINUTE), updated_at = NOW() WHERE id = ?',
+      [token, expiryMins, user.id]
     );
 
-    // TODO: send email via configured provider; for now return masked response
-    // Never leak the token here in production APIs.
-    return res.json({ ok:true });
-  } catch (e) { next(e); }
+    // TODO: send email in production (SMTP/SendGrid/etc.)
+    // For now we return token ONLY in non-production to assist testing.
+    const includeToken = (process.env.NODE_ENV !== 'production');
+    return res.json({
+      ok: true,
+      requested: true,
+      ...(includeToken ? { token } : {})
+    });
+  } catch (err) {
+    console.error('POST /auth/request-reset error:', err);
+    return bad(res, 500, err.sqlMessage || err.message, 'server_error');
+  }
 });
 
-/** POST /auth/confirm-reset { token, new_password } */
-router.post('/auth/confirm-reset', async (req, res, next) => {
+/**
+ * POST /auth/confirm-reset
+ * Body: { token, new_password }
+ */
+router.post('/confirm-reset', async (req, res) => {
   try {
-    const token = String(req.body?.token || '').trim();
-    const newPassword = String(req.body?.new_password || '').trim();
-    if (!token || !newPassword) return res.status(400).json({ ok:false, error:'token_and_new_password_required' });
-    if (newPassword.length < 8) return res.status(400).json({ ok:false, error:'password_too_short' });
+    const token = String(req.body.token || '').trim();
+    const newPassword = String(req.body.new_password || '').trim();
 
-    const [rows] = await db.query(
-      `SELECT * FROM password_reset_tokens WHERE token=? AND used=0 LIMIT 1`,
+    if (!token || !newPassword) {
+      return bad(res, 400, 'token and new_password are required');
+    }
+
+    // Load user by active (non-expired) token
+    const rows = await q(
+      'SELECT id FROM users WHERE reset_token = ? AND reset_token_expiry IS NOT NULL AND reset_token_expiry > NOW() LIMIT 1',
       [token]
     );
-    if (!rows.length) return res.status(400).json({ ok:false, error:'invalid_or_used_token' });
-    const pr = rows[0];
-    if (dayjs(pr.expires_at).isBefore(dayjs())) return res.status(400).json({ ok:false, error:'token_expired' });
+    if (!rows || rows.length === 0) {
+      return bad(res, 400, 'invalid or expired token');
+    }
+    const userId = rows[0].id;
 
-    // Hash securely
-    const saltRounds = 12;
-    const hashed = await bcrypt.hash(newPassword, saltRounds);
+    // Update password + clear token fields
+    const password_hash = await bcrypt.hash(newPassword, 10);
+    await db.query(
+      `UPDATE users
+         SET password_hash = ?, reset_token = NULL, reset_token_expiry = NULL, updated_at = NOW()
+       WHERE id = ?`,
+      [password_hash, userId]
+    );
 
-    // Persist to users.password_hash
-    await db.query(`UPDATE users SET password_hash = ? WHERE id = ?`, [hashed, pr.user_id]);
-    await db.query(`UPDATE password_reset_tokens SET used=1 WHERE id=?`, [pr.id]);
-
-    res.json({ ok:true, reset:true });
-  } catch (e) { next(e); }
+    return res.json({ ok: true, reset: true });
+  } catch (err) {
+    console.error('POST /auth/confirm-reset error:', err);
+    return bad(res, 500, err.sqlMessage || err.message, 'server_error');
+  }
 });
 
 module.exports = router;
-module.exports.default = router;
+
