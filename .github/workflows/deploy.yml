@@ -1,0 +1,57 @@
+name: Deploy to EasyQue server
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Write the private key from the GitHub Secret into a file and set perms
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # optional config so rsync/scp uses this key by default
+          cat >> ~/.ssh/config <<EOF
+          Host easyque-deploy
+            HostName ${{ secrets.SERVER_IP }}
+            User ${{ secrets.SERVER_USER }}
+            IdentityFile ~/.ssh/id_ed25519
+            StrictHostKeyChecking no
+          EOF
+
+      - name: Add server to known_hosts
+        run: |
+          ssh-keyscan -T 10 ${{ secrets.SERVER_IP }} >> ~/.ssh/known_hosts
+
+      # Sync ALL code to the server path; delete files removed from repo
+      - name: Rsync code to server
+        run: |
+          rsync -avz --delete \
+            --exclude ".git" \
+            -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" \
+            ./ ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_IP }}:${{ secrets.PROJECT_PATH }}/
+
+      # Install/update dependencies on the server
+      - name: Install deps on server
+        run: |
+          ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no \
+             ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_IP }} \
+             "cd '${{ secrets.PROJECT_PATH }}' && npm ci || npm install"
+
+      # Restart your PM2 app
+      - name: Restart PM2 app
+        run: |
+          ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no \
+             ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_IP }} \
+             "cd '${{ secrets.PROJECT_PATH }}' && pm2 restart easyque-backend --update-env || pm2 start index.js --name easyque-backend"
