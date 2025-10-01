@@ -1,185 +1,63 @@
-// routes/users.js — FULL FILE (driver-agnostic DB calls)
-
-const express = require('express');
-const bcrypt = require('bcryptjs');
-const path = require('path');
-const fs = require('fs');
-const multer = require('multer');
-const db = require('../db');
-
+// routes/users.js
+const express = require("express");
 const router = express.Router();
+const db = require("../db");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
 
-/* --------------------------- small DB helpers --------------------------- */
-async function dbQuery(sql, params) {
-  const res = await db.query(sql, params);
-  if (Array.isArray(res)) {
-    if (Array.isArray(res[0]) || typeof res[0] === 'object') {
-      return { rows: res[0], fields: res[1] };
-    }
-  }
-  return { rows: res, fields: undefined };
+// File upload (profile pictures)
+const uploadDir = path.join(__dirname, "../uploads");
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir);
 }
-async function dbExec(sql, params) {
-  const res = await db.query(sql, params);
-  if (Array.isArray(res)) return res[0] ?? res;
-  return res;
-}
-
-/* ------------------------------ utilities ------------------------------ */
-function apiError(res, status, details, code = 'bad_request') {
-  return res.status(status).json({ ok: false, error: code, details });
-}
-const sanitizeEmail = v => String(v || '').trim().toLowerCase();
-const sanitizeText  = v => String(v || '').trim();
-
-const ROLE_MAP = {
-  admin: 'admin',
-  organization_admin: 'organization_admin',
-  receptionist: 'receptionist',
-  assigned_user: 'assigned_user',
-};
-
-/* --------------------------- uploads (multer) --------------------------- */
-const uploadDir = path.join(process.cwd(), 'uploads', 'profiles');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
 const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => {
-    const userId = (req.user && req.user.id) || 'anon';
-    const ext = path.extname(file.originalname || '.jpg') || '.jpg';
-    cb(null, `user_${userId}_${Date.now()}${ext}`);
-  },
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) =>
+    cb(null, Date.now() + "-" + Math.round(Math.random() * 1e9) + path.extname(file.originalname)),
 });
 const upload = multer({ storage });
 
-/* --------------------------------- SQL --------------------------------- */
-async function getUsersByOrg(orgId) {
-  const { rows } = await dbQuery(
-    `SELECT id, org_id, name, email, role, is_active, profile_photo_url, created_at, updated_at
-     FROM users
-     WHERE org_id = ?
-     ORDER BY id DESC`,
-    [orgId]
-  );
-  return rows;
-}
-async function emailExists(email) {
-  const { rows } = await dbQuery(`SELECT id FROM users WHERE email = ? LIMIT 1`, [email]);
-  return Array.isArray(rows) && rows.length > 0;
-}
-async function insertUser({ org_id, name, email, role, password }) {
-  const password_hash = await bcrypt.hash(password, 10);
-  const result = await dbExec(
-    `INSERT INTO users (org_id, name, email, role, password_hash, is_active, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 1, NOW(), NOW())`,
-    [org_id, name, email, role, password_hash]
-  );
-  return result && (result.insertId || result.lastInsertId || null);
-}
-async function updateMyProfile(userId, patch) {
-  const fields = [];
-  const params = [];
-  const allow = { name: 'name', phone: 'phone' };
-  Object.keys(allow).forEach(k => {
-    if (patch[k] !== undefined) {
-      fields.push(`${allow[k]} = ?`);
-      params.push(sanitizeText(patch[k]));
-    }
+// Middleware to check JWT
+function auth(req, res, next) {
+  const header = req.headers.authorization;
+  if (!header) return res.status(401).json({ error: "Missing token" });
+  const token = header.split(" ")[1];
+  jwt.verify(token, process.env.JWT_SECRET || "supersecret", (err, decoded) => {
+    if (err) return res.status(401).json({ error: "Invalid token" });
+    req.user = decoded;
+    next();
   });
-  if (!fields.length) return 0;
-  params.push(userId);
-  const result = await dbExec(
-    `UPDATE users SET ${fields.join(', ')}, updated_at = NOW() WHERE id = ?`,
-    params
-  );
-  return (result && (result.affectedRows || result.rowCount)) || 0;
-}
-async function setMyPhoto(userId, relativeUrl) {
-  const result = await dbExec(
-    `UPDATE users SET profile_photo_url = ?, updated_at = NOW() WHERE id = ?`,
-    [relativeUrl, userId]
-  );
-  return (result && (result.affectedRows || result.rowCount)) || 0;
 }
 
-/* -------------------------------- routes -------------------------------- */
-
-// GET /users?org_id=
-router.get('/', async (req, res) => {
+// ---------------- PROFILE EDIT ----------------
+// Postman expects PUT /users/profile/edit
+router.put("/profile/edit", auth, async (req, res) => {
   try {
-    const org_id = parseInt(req.query.org_id, 10);
-    if (!org_id) return apiError(res, 400, 'org_id is required');
-    const users = await getUsersByOrg(org_id);
-    return res.json({ ok: true, count: users.length, users });
+    const { name, phone } = req.body;
+    await db.query("UPDATE users SET name=?, phone=? WHERE id=?", [
+      name,
+      phone,
+      req.user.id,
+    ]);
+    return res.json({ message: "Profile updated" });
   } catch (err) {
-    console.error('GET /users error:', err);
-    return apiError(res, 500, err.sqlMessage || err.message, 'server_error');
+    console.error("Profile edit error:", err);
+    return res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// POST /users
-router.post('/', async (req, res) => {
+// ---------------- UPLOAD PROFILE PICTURE ----------------
+router.post("/profile/picture", auth, upload.single("file"), async (req, res) => {
   try {
-    const org_id  = parseInt(req.body.org_id, 10);
-    const name    = sanitizeText(req.body.name);
-    const email   = sanitizeEmail(req.body.email);
-    const roleIn  = sanitizeText(req.body.role);
-    const password= sanitizeText(req.body.password);
-
-    if (!org_id || !name || !email || !roleIn || !password) {
-      return apiError(res, 400, 'org_id, name, email, role, password are required');
-    }
-    const role = ROLE_MAP[roleIn] || roleIn;
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return apiError(res, 400, 'email is invalid');
-    }
-
-    try {
-      if (await emailExists(email)) return apiError(res, 409, 'email already exists', 'conflict');
-    } catch (_) { /* soft check only */ }
-
-    const id = await insertUser({ org_id, name, email, role, password });
-    return res.status(201).json({ ok: true, id });
+    const filename = `/uploads/${req.file.filename}`;
+    await db.query("UPDATE users SET profile_pic=? WHERE id=?", [filename, req.user.id]);
+    return res.json({ message: "Profile picture uploaded", url: filename });
   } catch (err) {
-    if (err && (err.code === 'ER_DUP_ENTRY' || /duplicate/i.test(err.message))) {
-      return apiError(res, 409, 'email already exists', 'conflict');
-    }
-    console.error('POST /users error:', err);
-    return apiError(res, 500, err.sqlMessage || err.message, 'server_error');
-  }
-});
-
-// PATCH /users/me  (testing fallback: ?user_id=)
-router.patch('/me', async (req, res) => {
-  try {
-    const userId = (req.user && req.user.id) || parseInt(req.query.user_id, 10);
-    if (!userId) return apiError(res, 401, 'user not authenticated (missing user_id)', 'unauthorized');
-    const updated = await updateMyProfile(userId, req.body || {});
-    return res.json({ ok: true, updated });
-  } catch (err) {
-    console.error('PATCH /users/me error:', err);
-    return apiError(res, 500, err.sqlMessage || err.message, 'server_error');
-  }
-});
-
-// POST /users/me/photo  (multipart key: photo)
-router.post('/me/photo', upload.single('photo'), async (req, res) => {
-  try {
-    const userId = (req.user && req.user.id) || parseInt(req.query.user_id, 10);
-    if (!userId) {
-      if (req.file) fs.unlink(req.file.path, () => {});
-      return apiError(res, 401, 'user not authenticated (missing user_id)', 'unauthorized');
-    }
-    if (!req.file) return apiError(res, 400, 'photo file is required (key: photo)');
-    const relativeUrl = `/uploads/profiles/${path.basename(req.file.path)}`;
-    try { await setMyPhoto(userId, relativeUrl); } catch (e) {
-      console.warn('profile_photo_url update skipped:', e.sqlMessage || e.message);
-    }
-    return res.status(201).json({ ok: true, url: relativeUrl });
-  } catch (err) {
-    console.error('POST /users/me/photo error:', err);
-    return apiError(res, 500, err.sqlMessage || err.message, 'server_error');
+    console.error("Profile picture upload error:", err);
+    return res.status(500).json({ error: "Internal server error" });
   }
 });
 
