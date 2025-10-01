@@ -1,41 +1,35 @@
-// routes/bookings_export.js — CSV export; uses token_number
-
-const express = require('express');
-const stringify = require('csv-stringify/sync').stringify;
-const dayjs = require('dayjs');
-
+// routes/bookings_export.js
+const express = require("express");
 const router = express.Router();
-const db = require('../services/db');
-const { requireAuth } = require('../middleware/auth');
+const db = require("../db");
+const { stringify } = require("csv-stringify/sync");
+const jwt = require("jsonwebtoken");
 
-router.get('/csv', requireAuth, async (req, res, next) => {
+// Middleware
+function auth(req, res, next) {
+  const header = req.headers.authorization;
+  if (!header) return res.status(401).json({ error: "Missing token" });
+  const token = header.split(" ")[1];
+  jwt.verify(token, process.env.JWT_SECRET || "supersecret", (err, decoded) => {
+    if (err) return res.status(401).json({ error: "Invalid token" });
+    req.user = decoded;
+    next();
+  });
+}
+
+router.get("/export", auth, async (req, res) => {
   try {
-    const org_id = Number(req.query.org_id || 0);
-    const from = (req.query.from || '').trim();
-    const to = (req.query.to || '').trim();
-    if (!org_id) return res.status(400).json({ ok:false, error:'org_id required' });
-
-    const p = [org_id];
-    let where = `WHERE org_id = ?`;
-    if (from) { where += ` AND booking_date >= ?`; p.push(from); }
-    if (to)   { where += ` AND booking_date <= ?`; p.push(to); }
-
-    const [rows] = await db.query(
-      `SELECT id, booking_date, user_name, user_phone, assigned_user_id,
-              status, token_number, scheduled_at, created_at
-         FROM bookings
-        ${where}
-        ORDER BY booking_date DESC, token_number ASC`,
-      p
-    );
+    const { org_id } = req.query;
+    const [rows] = await db.query("SELECT * FROM bookings WHERE org_id=?", [org_id]);
 
     const csv = stringify(rows, { header: true });
-    const file = `bookings_${org_id}_${dayjs().format('YYYYMMDD_HHmmss')}.csv`;
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename="${file}"`);
+    res.setHeader("Content-disposition", "attachment; filename=bookings.csv");
+    res.set("Content-Type", "text/csv");
     res.send(csv);
-  } catch (e) { next(e); }
+  } catch (err) {
+    console.error("Bookings export error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 module.exports = router;
-module.exports.default = router;
