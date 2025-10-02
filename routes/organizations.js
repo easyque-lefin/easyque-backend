@@ -59,6 +59,17 @@ async function pickAllowedFields(table, body, payloadMap) {
   return { fields, allowed };
 }
 
+/** NEW: simple slug helper (added) */
+function slugify(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^\w\s-]/g, '')
+    .trim()
+    .replace(/[\s_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 /* =========================================================
    NEW: CREATE / LIST / "MY ORG"
    ========================================================= */
@@ -114,6 +125,12 @@ router.post(
 
       // Minimal required field
       fields.name = String(body.name);
+
+      // *** NEW: ensure slug if the column exists and none provided ***
+      if (allowed.has('slug')) {
+        const incoming = (body.slug && String(body.slug).trim()) || '';
+        fields.slug = incoming || `${slugify(fields.name)}-${Date.now()}`;
+      }
 
       // Insert
       const [r] = await db.query(`INSERT INTO ${table} SET ?`, [fields]);
