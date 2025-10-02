@@ -59,39 +59,37 @@ async function pickAllowedFields(table, body, payloadMap) {
   return { fields, allowed };
 }
 
-/* ---------- slug helpers (NEW) ---------- */
-function slugify(input) {
-  return String(input || '')
-    .trim()
+/* ---------- NEW: slug helpers (auto-generate & ensure unique) ---------- */
+function slugify(str) {
+  return String(str || '')
     .toLowerCase()
-    // strip accents:
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    // non-alphanumeric -> dash:
-    .replace(/[^a-z0-9]+/g, '-')
-    // trim dashes:
-    .replace(/^-+|-+$/g, '')
-    // keep short:
-    .substring(0, 80) || 'org';
+    .normalize('NFKD')                       // split accents
+    .replace(/[\u0300-\u036f]/g, '')         // drop accents
+    .replace(/[^a-z0-9]+/g, '-')             // non-alnum -> dash
+    .replace(/(^-|-$)+/g, '')                // trim dashes
+    .substring(0, 100);                      // keep within typical column size
 }
 
-async function ensureUniqueSlug(base) {
-  let candidate = base || 'org';
-  // Is exact candidate free?
-  let [rows] = await db.query(`SELECT id FROM organizations WHERE slug = ? LIMIT 1`, [candidate]);
-  if (rows.length === 0) return candidate;
+async function ensureUniqueSlug(base, excludeOrgId = null) {
+  // If base is empty, start with "org"
+  const baseClean = slugify(base) || 'org';
+  let candidate = baseClean;
+  let i = 1;
 
-  // Try candidate-2, -3, ...
-  let i = 2;
-  // Cap attempts just in case (practically never reached)
-  while (i < 10000) {
-    const next = `${base}-${i}`;
-    // eslint-disable-next-line no-await-in-loop
-    [rows] = await db.query(`SELECT id FROM organizations WHERE slug = ? LIMIT 1`, [next]);
-    if (rows.length === 0) return next;
+  // Build query with optional exclusion (for PATCH)
+  while (true) {
+    let sql = 'SELECT id FROM organizations WHERE slug = ?';
+    const params = [candidate];
+    if (excludeOrgId) {
+      sql += ' AND id <> ?';
+      params.push(excludeOrgId);
+    }
+    const [rows] = await db.query(sql, params);
+    if (!rows.length) return candidate;
     i += 1;
+    candidate = `${baseClean}-${i}`;
+    if (candidate.length > 100) candidate = candidate.slice(0, 100);
   }
-  // Fallback (extremely unlikely)
-  return `${base}-${Date.now()}`;
 }
 
 /* =========================================================
@@ -112,8 +110,7 @@ async function ensureUniqueSlug(base) {
  *   "service": "OP",          -> maps to 'services' if that column exists
  *   "lat": 12.34,
  *   "lng": 56.78,
- *   "map_url": "https://maps.google.com/?...",
- *   "slug": "my-org"          -> optional; if omitted, we generate one
+ *   "map_url": "https://maps.google.com/?..."
  * }
  */
 router.post(
@@ -140,33 +137,32 @@ router.post(
         ['lat', 'lat', v => (v == null ? null : Number(v))],
         ['lng', 'lng', v => (v == null ? null : Number(v))],
         ['map_url', 'map_url', v => String(v)],
+        // NOTE: client doesn't need to send slug; we auto-generate below.
+        // keeping here for compatibility if it *is* sent:
         ['slug', 'slug', v => String(v)]
       ];
       const { fields, allowed } = await pickAllowedFields(table, body, payloadMap);
 
-      // Required
+      // Minimal required field (always set)
       fields.name = String(body.name);
 
-      // Timestamps if present
+      // Optional timestamps if present
       if (allowed.has('created_at')) fields.created_at = dayjs().format('YYYY-MM-DD HH:mm:ss');
       if (allowed.has('updated_at')) fields.updated_at = dayjs().format('YYYY-MM-DD HH:mm:ss');
 
-      // ---- NEW: slug handling ----
-      // If we have a slug column, ensure we provide a unique one.
+      // ★★★ Always generate slug if the column exists, regardless of request body ★★★
       if (allowed.has('slug')) {
-        if (!fields.slug || String(fields.slug).trim().length === 0) {
-          const base = slugify(fields.name);
-          fields.slug = await ensureUniqueSlug(base);
-        } else {
-          fields.slug = await ensureUniqueSlug(slugify(fields.slug));
-        }
+        const base = fields.slug && String(fields.slug).trim().length > 0
+          ? fields.slug
+          : fields.name || body.name || 'org';
+        fields.slug = await ensureUniqueSlug(base);
       }
 
       // Insert
       const [r] = await db.query(`INSERT INTO ${table} SET ?`, [fields]);
 
       // Optionally map org to the creator (if a mapping table exists)
-      // e.g., user_orgs(user_id, org_id, role)
+      // e.g., user_orgs(user_id, org_id, role). We'll detect table and columns:
       const userId = req.user && req.user.id;
       if (userId && (await getCols('user_orgs')).size) {
         const cols = await getCols('user_orgs');
@@ -181,10 +177,6 @@ router.post(
 
       return res.status(201).json({ ok: true, id: r.insertId });
     } catch (err) {
-      // If the DB still errors on slug unique constraint, surface a clean message
-      if (err && err.code === 'ER_DUP_ENTRY') {
-        return res.status(409).json({ ok: false, error: 'slug_conflict' });
-      }
       next(err);
     }
   }
@@ -309,9 +301,12 @@ router.patch(
         return res.status(400).json({ ok: false, error: 'no_valid_fields' });
       }
 
-      // ---- NEW: keep slug unique if updating it ----
-      if (allowed.has('slug') && fields.slug != null) {
-        fields.slug = await ensureUniqueSlug(slugify(String(fields.slug)));
+      // If slug column exists and slug was provided, normalize & keep unique
+      if (allowed.has('slug') && Object.prototype.hasOwnProperty.call(fields, 'slug')) {
+        const base = fields.slug && String(fields.slug).trim().length > 0
+          ? fields.slug
+          : (fields.name || body.name || '');
+        fields.slug = await ensureUniqueSlug(base, org_id);
       }
 
       if (allowed.has('updated_at')) {
@@ -321,9 +316,6 @@ router.patch(
       await db.query(`UPDATE organizations SET ? WHERE id=?`, [fields, org_id]);
       res.json({ ok: true, updated: fields });
     } catch (err) {
-      if (err && err.code === 'ER_DUP_ENTRY') {
-        return res.status(409).json({ ok: false, error: 'slug_conflict' });
-      }
       next(err);
     }
   }
