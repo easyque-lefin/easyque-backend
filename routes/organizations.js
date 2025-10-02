@@ -59,15 +59,39 @@ async function pickAllowedFields(table, body, payloadMap) {
   return { fields, allowed };
 }
 
-/** NEW: simple slug helper (added) */
-function slugify(s) {
-  return String(s || '')
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[^\w\s-]/g, '')
+/* ---------- slug helpers (NEW) ---------- */
+function slugify(input) {
+  return String(input || '')
     .trim()
-    .replace(/[\s_-]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+    .toLowerCase()
+    // strip accents:
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    // non-alphanumeric -> dash:
+    .replace(/[^a-z0-9]+/g, '-')
+    // trim dashes:
+    .replace(/^-+|-+$/g, '')
+    // keep short:
+    .substring(0, 80) || 'org';
+}
+
+async function ensureUniqueSlug(base) {
+  let candidate = base || 'org';
+  // Is exact candidate free?
+  let [rows] = await db.query(`SELECT id FROM organizations WHERE slug = ? LIMIT 1`, [candidate]);
+  if (rows.length === 0) return candidate;
+
+  // Try candidate-2, -3, ...
+  let i = 2;
+  // Cap attempts just in case (practically never reached)
+  while (i < 10000) {
+    const next = `${base}-${i}`;
+    // eslint-disable-next-line no-await-in-loop
+    [rows] = await db.query(`SELECT id FROM organizations WHERE slug = ? LIMIT 1`, [next]);
+    if (rows.length === 0) return next;
+    i += 1;
+  }
+  // Fallback (extremely unlikely)
+  return `${base}-${Date.now()}`;
 }
 
 /* =========================================================
@@ -88,7 +112,8 @@ function slugify(s) {
  *   "service": "OP",          -> maps to 'services' if that column exists
  *   "lat": 12.34,
  *   "lng": 56.78,
- *   "map_url": "https://maps.google.com/?..."
+ *   "map_url": "https://maps.google.com/?...",
+ *   "slug": "my-org"          -> optional; if omitted, we generate one
  * }
  */
 router.post(
@@ -119,24 +144,29 @@ router.post(
       ];
       const { fields, allowed } = await pickAllowedFields(table, body, payloadMap);
 
-      // Optional timestamps if present
+      // Required
+      fields.name = String(body.name);
+
+      // Timestamps if present
       if (allowed.has('created_at')) fields.created_at = dayjs().format('YYYY-MM-DD HH:mm:ss');
       if (allowed.has('updated_at')) fields.updated_at = dayjs().format('YYYY-MM-DD HH:mm:ss');
 
-      // Minimal required field
-      fields.name = String(body.name);
-
-      // *** NEW: ensure slug if the column exists and none provided ***
+      // ---- NEW: slug handling ----
+      // If we have a slug column, ensure we provide a unique one.
       if (allowed.has('slug')) {
-        const incoming = (body.slug && String(body.slug).trim()) || '';
-        fields.slug = incoming || `${slugify(fields.name)}-${Date.now()}`;
+        if (!fields.slug || String(fields.slug).trim().length === 0) {
+          const base = slugify(fields.name);
+          fields.slug = await ensureUniqueSlug(base);
+        } else {
+          fields.slug = await ensureUniqueSlug(slugify(fields.slug));
+        }
       }
 
       // Insert
       const [r] = await db.query(`INSERT INTO ${table} SET ?`, [fields]);
 
       // Optionally map org to the creator (if a mapping table exists)
-      // e.g., user_orgs(user_id, org_id, role). We'll detect table and columns:
+      // e.g., user_orgs(user_id, org_id, role)
       const userId = req.user && req.user.id;
       if (userId && (await getCols('user_orgs')).size) {
         const cols = await getCols('user_orgs');
@@ -151,6 +181,10 @@ router.post(
 
       return res.status(201).json({ ok: true, id: r.insertId });
     } catch (err) {
+      // If the DB still errors on slug unique constraint, surface a clean message
+      if (err && err.code === 'ER_DUP_ENTRY') {
+        return res.status(409).json({ ok: false, error: 'slug_conflict' });
+      }
       next(err);
     }
   }
@@ -275,6 +309,11 @@ router.patch(
         return res.status(400).json({ ok: false, error: 'no_valid_fields' });
       }
 
+      // ---- NEW: keep slug unique if updating it ----
+      if (allowed.has('slug') && fields.slug != null) {
+        fields.slug = await ensureUniqueSlug(slugify(String(fields.slug)));
+      }
+
       if (allowed.has('updated_at')) {
         fields.updated_at = dayjs().format('YYYY-MM-DD HH:mm:ss');
       }
@@ -282,6 +321,9 @@ router.patch(
       await db.query(`UPDATE organizations SET ? WHERE id=?`, [fields, org_id]);
       res.json({ ok: true, updated: fields });
     } catch (err) {
+      if (err && err.code === 'ER_DUP_ENTRY') {
+        return res.status(409).json({ ok: false, error: 'slug_conflict' });
+      }
       next(err);
     }
   }
