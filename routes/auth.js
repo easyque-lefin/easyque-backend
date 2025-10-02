@@ -8,7 +8,7 @@ const { v4: uuidv4 } = require("uuid");
 
 const JWT_SECRET = process.env.JWT_SECRET || "supersecret";
 
-// Small helpers
+// Helper: detect bcrypt hash format
 const looksLikeBcrypt = (val) =>
   typeof val === "string" &&
   val.startsWith("$2") && // $2a, $2b, $2y
@@ -22,48 +22,47 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ error: "Email and password required" });
     }
 
-    // NOTE: mysql2/promise typically returns [rows] — adjust if your db wrapper differs
     const [rows] = await db.query("SELECT * FROM users WHERE email = ? LIMIT 1", [email]);
     if (!rows || !rows.length) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
     const user = rows[0];
+    let ok = false;
 
-    // 1) Preferred: password_hash (what /signup/complete writes)
-    if (user.password_hash) {
-      const ok = await bcrypt.compare(password, user.password_hash);
-      if (!ok) return res.status(401).json({ error: "Invalid credentials" });
+    if (user.password_hash && looksLikeBcrypt(user.password_hash)) {
+      // Preferred: compare against password_hash
+      ok = await bcrypt.compare(password, user.password_hash);
     } else if (user.password) {
-      // 2) Legacy path: password column exists
       if (looksLikeBcrypt(user.password)) {
-        // a) password column already holds a bcrypt hash
-        const ok = await bcrypt.compare(password, user.password);
-        if (!ok) return res.status(401).json({ error: "Invalid credentials" });
-
-        // migrate to password_hash for consistency
-        await db.query(
-          "UPDATE users SET password_hash = ?, password = NULL, updated_at = NOW() WHERE id = ?",
-          [user.password, user.id]
-        );
+        // Legacy: bcrypt hash stored in password column
+        ok = await bcrypt.compare(password, user.password);
+        if (ok) {
+          // migrate to password_hash
+          await db.query(
+            "UPDATE users SET password_hash = ?, password = NULL, updated_at = NOW() WHERE id = ?",
+            [user.password, user.id]
+          );
+        }
       } else {
-        // b) Very old: password column is PLAINTEXT
-        const ok = password === user.password;
-        if (!ok) return res.status(401).json({ error: "Invalid credentials" });
-
-        // migrate: hash and move to password_hash; null plaintext
-        const hashed = await bcrypt.hash(password, 10);
-        await db.query(
-          "UPDATE users SET password_hash = ?, password = NULL, updated_at = NOW() WHERE id = ?",
-          [hashed, user.id]
-        );
+        // Very old: plaintext password stored
+        ok = password === user.password;
+        if (ok) {
+          // migrate to bcrypt-hash
+          const hashed = await bcrypt.hash(password, 10);
+          await db.query(
+            "UPDATE users SET password_hash = ?, password = NULL, updated_at = NOW() WHERE id = ?",
+            [hashed, user.id]
+          );
+        }
       }
-    } else {
-      // Neither column present → no way to verify
+    }
+
+    if (!ok) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    // Auth OK → issue token
+    // Auth success → issue JWT
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role, org_id: user.org_id },
       JWT_SECRET,
@@ -87,7 +86,6 @@ router.post("/login", async (req, res) => {
 });
 
 // ---------------- REQUEST PASSWORD RESET ----------------
-// Path: /auth/request-reset
 router.post("/request-reset", async (req, res) => {
   try {
     const { email } = req.body || {};
@@ -95,7 +93,6 @@ router.post("/request-reset", async (req, res) => {
 
     const [rows] = await db.query("SELECT id FROM users WHERE email = ? LIMIT 1", [email]);
     if (!rows || !rows.length) {
-      // For security you can still return 200, but keeping your current behavior:
       return res.status(404).json({ error: "User not found" });
     }
 
@@ -105,7 +102,7 @@ router.post("/request-reset", async (req, res) => {
       email,
     ]);
 
-    // TODO: send email with resetToken (stub)
+    // TODO: send email with resetToken
     console.log(`Password reset requested for ${email}, token: ${resetToken}`);
 
     return res.json({ message: "Password reset requested", resetToken });
@@ -116,7 +113,6 @@ router.post("/request-reset", async (req, res) => {
 });
 
 // ---------------- RESET PASSWORD ----------------
-// Path: /auth/reset
 router.post("/reset", async (req, res) => {
   try {
     const { token, password } = req.body || {};
@@ -132,7 +128,6 @@ router.post("/reset", async (req, res) => {
     const userId = rows[0].id;
     const hashed = await bcrypt.hash(password, 10);
 
-    // Write to password_hash, clear legacy password & reset token
     await db.query(
       "UPDATE users SET password_hash = ?, password = NULL, reset_token = NULL, updated_at = NOW() WHERE id = ?",
       [hashed, userId]
@@ -146,5 +141,6 @@ router.post("/reset", async (req, res) => {
 });
 
 module.exports = router;
+
 
 
