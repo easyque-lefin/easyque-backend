@@ -8,13 +8,32 @@ const { v4: uuidv4 } = require("uuid");
 
 const JWT_SECRET = process.env.JWT_SECRET || "supersecret";
 
-// Helper: detect bcrypt hash format
+/** Utility: does a string look like a bcrypt hash? */
 const looksLikeBcrypt = (val) =>
-  typeof val === "string" &&
-  val.startsWith("$2") && // $2a, $2b, $2y
-  val.length >= 50;
+  typeof val === "string" && val.startsWith("$2") && val.length >= 50;
 
-// ---------------- LOGIN ----------------
+/** Utility: normalize db.query() result to an array of rows
+ * Works with:
+ *  - mysql2/promise: [rows, fields]
+ *  - custom wrappers: rows
+ */
+function toRows(qres) {
+  if (Array.isArray(qres)) {
+    // If first item is also an array, it's [rows, fields]
+    return Array.isArray(qres[0]) ? qres[0] : qres;
+  }
+  return [];
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                   LOGIN                                    */
+/* POST /auth/login
+ * Body: { email, password }
+ * - Verifies against password_hash (preferred)
+ * - Falls back to legacy password column (bcrypt or plaintext)
+ * - Migrates legacy password to password_hash on success
+ * - Returns { accessToken, user }
+/* -------------------------------------------------------------------------- */
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body || {};
@@ -22,33 +41,34 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ error: "Email and password required" });
     }
 
-    const [rows] = await db.query("SELECT * FROM users WHERE email = ? LIMIT 1", [email]);
-    if (!rows || !rows.length) {
+    const qres = await db.query("SELECT * FROM users WHERE email = ? LIMIT 1", [email]);
+    const rows = toRows(qres);
+    if (!rows || rows.length === 0) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
     const user = rows[0];
+
+    // -------- password verification (hash-first, then legacy) --------
     let ok = false;
 
-    if (user.password_hash && looksLikeBcrypt(user.password_hash)) {
-      // Preferred: compare against password_hash
+    if (user.password_hash) {
       ok = await bcrypt.compare(password, user.password_hash);
     } else if (user.password) {
       if (looksLikeBcrypt(user.password)) {
-        // Legacy: bcrypt hash stored in password column
+        // legacy column already holds a bcrypt hash
         ok = await bcrypt.compare(password, user.password);
         if (ok) {
-          // migrate to password_hash
+          // migrate hash to password_hash for consistency
           await db.query(
             "UPDATE users SET password_hash = ?, password = NULL, updated_at = NOW() WHERE id = ?",
             [user.password, user.id]
           );
         }
       } else {
-        // Very old: plaintext password stored
+        // VERY old plaintext password
         ok = password === user.password;
         if (ok) {
-          // migrate to bcrypt-hash
           const hashed = await bcrypt.hash(password, 10);
           await db.query(
             "UPDATE users SET password_hash = ?, password = NULL, updated_at = NOW() WHERE id = ?",
@@ -62,7 +82,7 @@ router.post("/login", async (req, res) => {
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    // Auth success → issue JWT
+    // -------- issue JWT --------
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role, org_id: user.org_id },
       JWT_SECRET,
@@ -85,22 +105,29 @@ router.post("/login", async (req, res) => {
   }
 });
 
-// ---------------- REQUEST PASSWORD RESET ----------------
+/* -------------------------------------------------------------------------- */
+/*                          REQUEST PASSWORD RESET                             */
+/* POST /auth/request-reset
+ * Body: { email }
+ * - Generates a reset_token and stores it on user
+ * - (Stub) You can email the token to the user later
+/* -------------------------------------------------------------------------- */
 router.post("/request-reset", async (req, res) => {
   try {
     const { email } = req.body || {};
     if (!email) return res.status(400).json({ error: "Email required" });
 
-    const [rows] = await db.query("SELECT id FROM users WHERE email = ? LIMIT 1", [email]);
-    if (!rows || !rows.length) {
+    const qres = await db.query("SELECT id FROM users WHERE email = ? LIMIT 1", [email]);
+    const rows = toRows(qres);
+    if (!rows || rows.length === 0) {
       return res.status(404).json({ error: "User not found" });
     }
 
     const resetToken = uuidv4();
-    await db.query("UPDATE users SET reset_token = ?, updated_at = NOW() WHERE email = ?", [
-      resetToken,
-      email,
-    ]);
+    await db.query(
+      "UPDATE users SET reset_token = ?, updated_at = NOW() WHERE email = ?",
+      [resetToken, email]
+    );
 
     // TODO: send email with resetToken
     console.log(`Password reset requested for ${email}, token: ${resetToken}`);
@@ -112,7 +139,12 @@ router.post("/request-reset", async (req, res) => {
   }
 });
 
-// ---------------- RESET PASSWORD ----------------
+/* -------------------------------------------------------------------------- */
+/*                              RESET PASSWORD                                 */
+/* POST /auth/reset
+ * Body: { token, password }
+ * - Validates token, writes bcrypt to password_hash, clears legacy fields
+/* -------------------------------------------------------------------------- */
 router.post("/reset", async (req, res) => {
   try {
     const { token, password } = req.body || {};
@@ -120,8 +152,9 @@ router.post("/reset", async (req, res) => {
       return res.status(400).json({ error: "token and password required" });
     }
 
-    const [rows] = await db.query("SELECT id FROM users WHERE reset_token = ? LIMIT 1", [token]);
-    if (!rows || !rows.length) {
+    const qres = await db.query("SELECT id FROM users WHERE reset_token = ? LIMIT 1", [token]);
+    const rows = toRows(qres);
+    if (!rows || rows.length === 0) {
       return res.status(400).json({ error: "Invalid or expired token" });
     }
 
@@ -141,6 +174,7 @@ router.post("/reset", async (req, res) => {
 });
 
 module.exports = router;
+
 
 
 
