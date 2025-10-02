@@ -44,8 +44,170 @@ const toBool = (v, d = false) =>
     ? d
     : String(v) === '1' || /^true$/i.test(String(v));
 
+/**
+ * Safely builds an object of fields => values that match existing columns.
+ * `payloadMap` is an array of [payloadKey, columnName, transformFn?]
+ */
+async function pickAllowedFields(table, body, payloadMap) {
+  const allowed = await getCols(table);
+  const fields = {};
+  for (const [payloadKey, colName, transform] of payloadMap) {
+    if (body[payloadKey] == null) continue;
+    if (!allowed.has(colName)) continue;
+    fields[colName] = transform ? transform(body[payloadKey]) : body[payloadKey];
+  }
+  return { fields, allowed };
+}
+
 /* =========================================================
-   ORGANIZATION ROUTES
+   NEW: CREATE / LIST / "MY ORG"
+   ========================================================= */
+
+/**
+ * POST /organizations
+ * Create a new organization (admin / organization_admin)
+ * Body accepts commonly used keys; only columns that exist are inserted.
+ *
+ * Typical accepted payload:
+ * {
+ *   "name": "My Org",
+ *   "address": "123 Street",  -> maps to 'location' if that column exists
+ *   "location": "123 Street", -> direct pass if column exists
+ *   "services": "OP, Lab",
+ *   "service": "OP",          -> maps to 'services' if that column exists
+ *   "lat": 12.34,
+ *   "lng": 56.78,
+ *   "map_url": "https://maps.google.com/?..."
+ * }
+ */
+router.post(
+  '/',
+  requireAuth,
+  requireAnyRole('admin', 'organization_admin'),
+  async (req, res, next) => {
+    try {
+      const body = req.body || {};
+      if (!body.name || String(body.name).trim().length === 0) {
+        return res.status(400).json({ ok: false, error: 'name_required' });
+      }
+
+      // Build a resilient insert object based on existing columns
+      const table = 'organizations';
+      const payloadMap = [
+        ['name', 'name', v => String(v)],
+        // prefer explicit "location", else allow "address"
+        ['location', 'location', v => String(v)],
+        ['address', 'location', v => String(v)],
+        // prefer "services", else "service"
+        ['services', 'services', v => String(v)],
+        ['service', 'services', v => String(v)],
+        ['lat', 'lat', v => (v == null ? null : Number(v))],
+        ['lng', 'lng', v => (v == null ? null : Number(v))],
+        ['map_url', 'map_url', v => String(v)],
+        ['slug', 'slug', v => String(v)]
+      ];
+      const { fields, allowed } = await pickAllowedFields(table, body, payloadMap);
+
+      // Optional timestamps if present
+      if (allowed.has('created_at')) fields.created_at = dayjs().format('YYYY-MM-DD HH:mm:ss');
+      if (allowed.has('updated_at')) fields.updated_at = dayjs().format('YYYY-MM-DD HH:mm:ss');
+
+      // Minimal required field
+      fields.name = String(body.name);
+
+      // Insert
+      const [r] = await db.query(`INSERT INTO ${table} SET ?`, [fields]);
+
+      // Optionally map org to the creator (if a mapping table exists)
+      // e.g., user_orgs(user_id, org_id, role). We'll detect table and columns:
+      const userId = req.user && req.user.id;
+      if (userId && (await getCols('user_orgs')).size) {
+        const cols = await getCols('user_orgs');
+        const rel = {};
+        if (cols.has('user_id')) rel.user_id = userId;
+        if (cols.has('org_id')) rel.org_id = r.insertId;
+        if (cols.has('role')) rel.role = 'organization_admin';
+        if (Object.keys(rel).length >= 2) {
+          await db.query(`INSERT INTO user_orgs SET ?`, [rel]);
+        }
+      }
+
+      return res.status(201).json({ ok: true, id: r.insertId });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /organizations
+ * List organizations (admin only). If you want org_admin to list their org(s),
+ * swap to requireAnyRole('admin','organization_admin') and join by user_orgs.
+ */
+router.get(
+  '/',
+  requireAuth,
+  requireAnyRole('admin'),
+  async (req, res, next) => {
+    try {
+      const [rows] = await db.query(
+        `SELECT id, name, slug, location, services, photo, banner_url, map_url,
+                created_at, updated_at
+         FROM organizations
+         ORDER BY created_at DESC`
+      );
+      res.json({ ok: true, organizations: rows });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /organizations/me
+ * Fetch the organization(s) for the current user.
+ * If you use a mapping table (user_orgs), this will return their org(s).
+ * If you don't have user_orgs, adapt this to your schema.
+ */
+router.get(
+  '/me',
+  requireAuth,
+  async (req, res, next) => {
+    try {
+      const userId = req.user && req.user.id;
+      if (!userId) return res.status(401).json({ ok: false, error: 'unauthorized' });
+
+      // First try user_orgs join if table exists
+      const uoCols = await getCols('user_orgs');
+      if (uoCols.size && uoCols.has('user_id') && uoCols.has('org_id')) {
+        const [rows] = await db.query(
+          `SELECT o.id, o.name, o.slug, o.location, o.services, o.photo, o.banner_url, o.map_url,
+                  o.created_at, o.updated_at
+           FROM organizations o
+           JOIN user_orgs uo ON uo.org_id = o.id
+           WHERE uo.user_id = ?`,
+          [userId]
+        );
+        return res.json({ ok: true, organizations: rows });
+      }
+
+      // If no mapping table, fall back to a single “default” org heuristic (optional)
+      const [rows] = await db.query(
+        `SELECT id, name, slug, location, services, photo, banner_url, map_url,
+                created_at, updated_at
+         FROM organizations
+         ORDER BY id DESC
+         LIMIT 1`
+      );
+      return res.json({ ok: true, organizations: rows });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/* =========================================================
+   EXISTING: FETCH / UPDATE / UPLOADS / LINKS / LIMITS
    ========================================================= */
 
 /**
@@ -96,6 +258,10 @@ router.patch(
         return res.status(400).json({ ok: false, error: 'no_valid_fields' });
       }
 
+      if (allowed.has('updated_at')) {
+        fields.updated_at = dayjs().format('YYYY-MM-DD HH:mm:ss');
+      }
+
       await db.query(`UPDATE organizations SET ? WHERE id=?`, [fields, org_id]);
       res.json({ ok: true, updated: fields });
     } catch (err) {
@@ -106,7 +272,7 @@ router.patch(
 
 /**
  * POST /organizations/:id/banner
- * Upload banner image
+ * Upload banner image (form-data: key = banner)
  */
 router.post(
   '/:id/banner',
@@ -133,7 +299,7 @@ router.post(
 
 /**
  * POST /organizations/:id/photo
- * Upload profile photo
+ * Upload profile photo (form-data: key = photo)
  */
 router.post(
   '/:id/photo',
@@ -222,7 +388,7 @@ router.get('/:id/limits', requireAuth, async (req, res, next) => {
 });
 
 /* =========================================================
-   ORG ITEMS ROUTES
+   ORG ITEMS ROUTES (existing)
    ========================================================= */
 
 /**
