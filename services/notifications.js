@@ -2,7 +2,8 @@
 // Notification sending service: abstraction for manual send / provider send and usage tracking.
 // This file provides functions used by routes/notifications.js and others.
 
-const db = require('../db');
+const db = require("../services/db");
+
 const config = require('../config');
 
 // Provider integration hooks go here (Twilio / WhatsApp Cloud API / 360dialog)
