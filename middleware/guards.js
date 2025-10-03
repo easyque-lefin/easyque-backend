@@ -1,6 +1,6 @@
 // middleware/guards.js
 const jwt = require('jsonwebtoken');
-const db = require('../db');
+const db = require("../services/db");
 
 const JWT_SECRET = process.env.JWT_SECRET || 'replace-me';
 
