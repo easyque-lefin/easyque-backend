@@ -1,6 +1,6 @@
 // services/billingScheduler.js
 const Razorpay = require('razorpay');
-let db; try { db = require('../services/db'); } catch { db = require('../db'); }
+const db = require("../services/db");
 
 const rzp = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID || '',
