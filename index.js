@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const express = require('express');
 const helmet = require('helmet');
-const morgan = require('morgan');
+// const morgan = require('morgan'); // ❌ removed
 const cors = require('cors');
 
 // Initialize DB early (adjust to your helper path)
@@ -15,7 +15,7 @@ app.set('trust proxy', 1);
 
 /* ----------------------------- global middleware ---------------------------- */
 app.use(helmet());
-app.use(morgan('combined'));
+// app.use(morgan('combined')); // ❌ removed morgan
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -66,7 +66,11 @@ app.use('/webhooks', require('./routes/webhooks'));
 
 /* ----------------------------------- 404 ----------------------------------- */
 app.use((req, res) => {
-  res.status(404).json({ ok: false, error: 'not_found', details: `Cannot ${req.method} ${req.path}` });
+  res.status(404).json({
+    ok: false,
+    error: 'not_found',
+    details: `Cannot ${req.method} ${req.path}`
+  });
 });
 
 /* ------------------------------- error handler ------------------------------ */
