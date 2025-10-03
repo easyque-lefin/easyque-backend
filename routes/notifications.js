@@ -3,7 +3,7 @@
 // Uses the same send-link logic as bookings.
 
 const express = require('express');
-const db = require('../db');
+const db = require("../services/db");
 const config = require('../config');
 
 const router = express.Router();
