@@ -6,7 +6,8 @@ const express = require('express');
 const crypto = require('crypto');
 const Razorpay = require('razorpay');
 
-let db; try { db = require('../services/db'); } catch { db = require('../db'); }
+const db = require("../services/db");
+
 const router = express.Router();
 
 const rzp = new Razorpay({
