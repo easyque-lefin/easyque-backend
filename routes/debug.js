@@ -1,6 +1,6 @@
 // routes/debug.js
 const express = require('express');
-const db = require('../db'); // assumes db.query(sql, params)
+const db = require("../services/db"); // assumes db.query(sql, params)
 const router = express.Router();
 
 router.get('/db', async (req, res) => {
