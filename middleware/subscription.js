@@ -2,7 +2,7 @@
 // Usage: const checkSubscription = require('../middleware/subscription');
 // app.use('/bookings', requireAuth, checkSubscription, bookingsRouter);
 
-const db = require('../db');
+const db = require("../services/db");
 
 async function checkSubscription(req, res, next) {
   try {
