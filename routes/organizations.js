@@ -541,5 +541,52 @@ router.delete(
   }
 );
 
+
+/* -------------------- ORG USERS -------------------- */
+
+// List users in an org
+router.get('/:org_id/users', requireAuth, async (req, res, next) => {
+  try {
+    const org_id = Number(req.params.org_id) || 0;
+    const [rows] = await db.query(
+      `SELECT id, org_id, name, email, dept, role, avg_service_seconds,
+              created_at, updated_at
+         FROM org_users WHERE org_id = ?
+         ORDER BY created_at ASC`,
+      [org_id]
+    );
+    res.json({ ok: true, users: rows });
+  } catch (err) { next(err); }
+});
+
+// Add one user to an org
+router.post('/:org_id/users', requireAuth, requireAnyRole('admin','organization_admin'), async (req, res, next) => {
+  try {
+    const org_id = Number(req.params.org_id) || 0;
+    const { name, email = '', dept = '', role } = req.body || {};
+    if (!org_id || !name || !role) {
+      return res.status(400).json({ ok:false, error:'missing_field', fields:{ org_id: !!org_id, name: !!name, role: !!role }});
+    }
+    const [r] = await db.query(
+      `INSERT INTO org_users (org_id, name, email, dept, role)
+       VALUES (?,?,?,?,?)`,
+      [org_id, String(name), String(email), String(dept), String(role)]
+    );
+    res.status(201).json({ ok:true, user:{ id:r.insertId, org_id, name, email, dept, role } });
+  } catch (err) { next(err); }
+});
+
+// Delete one user
+router.delete('/:org_id/users/:user_id', requireAuth, requireAnyRole('admin','organization_admin'), async (req, res, next) => {
+  try {
+    const org_id  = Number(req.params.org_id)  || 0;
+    const user_id = Number(req.params.user_id) || 0;
+    const [r] = await db.query(`DELETE FROM org_users WHERE id=? AND org_id=?`, [user_id, org_id]);
+    res.json({ ok:true, deleted: r.affectedRows });
+  } catch (err) { next(err); }
+});
+
+
 module.exports = router;
 module.exports.default = router;
+
