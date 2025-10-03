@@ -284,25 +284,39 @@ router.patch(
   requireAnyRole('admin', 'organization_admin'),
   async (req, res, next) => {
     try {
-      const org_id = num(req.params.id);
+      const org_id = Number(req.params.id);
       const body = req.body || {};
 
       const allowed = await getCols('organizations');
       const fields = {};
+
+      // Accept exact column keys
       for (const k of Object.keys(body)) {
         if (allowed.has(k)) fields[k] = body[k];
       }
 
-      if (!Object.keys(fields).length) {
-        return res.status(400).json({ ok: false, error: 'no_valid_fields' });
+      // Accept a few aliases the client may send
+      // (harmless if those columns don't exist)
+      if (body.service != null && allowed.has('services')) {
+        fields.services = String(body.service);
+      }
+      if (body.google_map_url != null && allowed.has('map_url')) {
+        fields.map_url = String(body.google_map_url);
+      }
+      if (body.mapUrl != null && allowed.has('map_url')) {
+        fields.map_url = String(body.mapUrl);
       }
 
-      // Keep slug unique/normalized when present
-      if (allowed.has('slug') && Object.prototype.hasOwnProperty.call(fields, 'slug')) {
-        const base = fields.slug && String(fields.slug).trim().length > 0
-          ? fields.slug
-          : (fields.name || body.name || '');
-        fields.slug = await ensureUniqueSlug(base, org_id);
+      // Drop nulls / empty strings
+      for (const k of Object.keys(fields)) {
+        const v = fields[k];
+        if (v == null) delete fields[k];
+        else if (typeof v === 'string' && v.trim().length === 0) delete fields[k];
+      }
+
+      // If nothing to update, return 200 with a note (avoid UI error toast)
+      if (!Object.keys(fields).length) {
+        return res.json({ ok: true, updated: {}, note: 'no_valid_fields' });
       }
 
       if (allowed.has('updated_at')) {
@@ -316,7 +330,6 @@ router.patch(
     }
   }
 );
-
 /**
  * POST /organizations/:id/banner
  */
@@ -530,5 +543,3 @@ router.delete(
 
 module.exports = router;
 module.exports.default = router;
-
-
