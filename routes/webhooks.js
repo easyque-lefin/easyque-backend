@@ -3,7 +3,7 @@
 
 const express = require('express');
 const crypto = require('crypto');
-let db; try { db = require('../services/db'); } catch { db = require('../db'); }
+const db = require("../services/db");
 
 const router = express.Router();
 
