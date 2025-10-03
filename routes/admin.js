@@ -2,7 +2,7 @@
 // Admin actions: deactivate/reactivate org, cascade delete org and related data, set fees/charges
 
 const express = require('express');
-const db = require('../db');
+const db = require("../services/db");
 
 const router = express.Router();
 
