@@ -1,7 +1,6 @@
 // middleware/limits.js
 const dayjs = require('dayjs');
-let db;
-try { db = require('../services/db'); } catch { db = require('../db'); }
+const db = require("../services/db");
 
 function num(x,d=0){ const n=Number(x); return Number.isFinite(n)?n:d; }
 
