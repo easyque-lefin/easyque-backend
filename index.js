@@ -48,7 +48,8 @@ try { app.use('/auth', require('./routes/auth-refresh')); } catch {}
 app.use('/users', require('./routes/users'));
 
 app.use('/organizations', require('./routes/organizations')); // create/list/me/:id, items, uploads
-app.use('/orgs', require('./routes/orgs'));                    // legacy/org utilities (breaks, etc.)
+
+//app.use('/orgs', require('./routes/orgs'));
 
 app.use('/bookings', require('./routes/bookings'));
 app.use('/status', require('./routes/status'));
