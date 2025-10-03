@@ -63,11 +63,11 @@ async function pickAllowedFields(table, body, payloadMap) {
 function slugify(str) {
   return String(str || '')
     .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)+/g, '')
-    .substring(0, 100);
+    .normalize('NFKD')                       // split accents
+    .replace(/[\u0300-\u036f]/g, '')         // drop accents
+    .replace(/[^a-z0-9]+/g, '-')             // non-alnum -> dash
+    .replace(/(^-|-$)+/g, '')                // trim dashes
+    .substring(0, 100);                      // keep within typical column size
 }
 
 async function ensureUniqueSlug(base, excludeOrgId = null) {
@@ -97,19 +97,6 @@ async function ensureUniqueSlug(base, excludeOrgId = null) {
 /**
  * POST /organizations
  * Create a new organization (admin / organization_admin)
- * Body accepts commonly used keys; only columns that exist are inserted.
- *
- * Typical accepted payload:
- * {
- *   "name": "My Org",
- *   "address": "123 Street",  -> maps to 'location' if that column exists
- *   "location": "123 Street", -> direct pass if column exists
- *   "services": "OP, Lab",
- *   "service": "OP",          -> maps to 'services' if that column exists
- *   "lat": 12.34,
- *   "lng": 56.78,
- *   "map_url": "https://maps.google.com/?..."
- * }
  */
 router.post(
   '/',
@@ -122,30 +109,36 @@ router.post(
         return res.status(400).json({ ok: false, error: 'name_required' });
       }
 
-      // Build a resilient insert object based on existing columns
       const table = 'organizations';
       const payloadMap = [
         ['name', 'name', v => String(v)],
+        // prefer explicit "location", else allow "address"
         ['location', 'location', v => String(v)],
         ['address', 'location', v => String(v)],
+        // prefer "services", else "service"
         ['services', 'services', v => String(v)],
         ['service', 'services', v => String(v)],
         ['lat', 'lat', v => (v == null ? null : Number(v))],
         ['lng', 'lng', v => (v == null ? null : Number(v))],
         ['map_url', 'map_url', v => String(v)],
-        // optional incoming slug, but we'll override with unique below if column exists
+        // accept incoming slug if sent, but we'll overwrite/normalize anyway
         ['slug', 'slug', v => String(v)]
       ];
       const { fields, allowed } = await pickAllowedFields(table, body, payloadMap);
 
-      // Minimal required field (always set)
+      // required
       fields.name = String(body.name);
+
+      // NEW: stamp creator if column exists
+      if (allowed.has('created_by') && req.user?.id) {
+        fields.created_by = req.user.id;
+      }
 
       // Optional timestamps if present
       if (allowed.has('created_at')) fields.created_at = dayjs().format('YYYY-MM-DD HH:mm:ss');
       if (allowed.has('updated_at')) fields.updated_at = dayjs().format('YYYY-MM-DD HH:mm:ss');
 
-      // Always generate slug if the column exists
+      // Always generate/normalize slug if column exists
       if (allowed.has('slug')) {
         const base = fields.slug && String(fields.slug).trim().length > 0
           ? fields.slug
@@ -153,17 +146,16 @@ router.post(
         fields.slug = await ensureUniqueSlug(base);
       }
 
-      // Insert
       const [r] = await db.query(`INSERT INTO ${table} SET ?`, [fields]);
 
-      // Optionally map org to the creator
+      // Link creator to org via user_orgs if that table exists
       const userId = req.user && req.user.id;
-      if (userId && (await getCols('user_orgs')).size) {
-        const cols = await getCols('user_orgs');
+      const uoCols = await getCols('user_orgs');
+      if (userId && uoCols.size) {
         const rel = {};
-        if (cols.has('user_id')) rel.user_id = userId;
-        if (cols.has('org_id')) rel.org_id = r.insertId;
-        if (cols.has('role')) rel.role = 'organization_admin';
+        if (uoCols.has('user_id')) rel.user_id = userId;
+        if (uoCols.has('org_id')) rel.org_id = r.insertId;
+        if (uoCols.has('role')) rel.role = 'organization_admin';
         if (Object.keys(rel).length >= 2) {
           await db.query(`INSERT INTO user_orgs SET ?`, [rel]);
         }
@@ -178,7 +170,7 @@ router.post(
 
 /**
  * GET /organizations
- * List organizations (admin only).
+ * Admin list
  */
 router.get(
   '/',
@@ -201,7 +193,7 @@ router.get(
 
 /**
  * GET /organizations/me
- * Fetch the organization(s) for the current user.
+ * Prefer user_orgs → created_by → global latest
  */
 router.get(
   '/me',
@@ -211,7 +203,7 @@ router.get(
       const userId = req.user && req.user.id;
       if (!userId) return res.status(401).json({ ok: false, error: 'unauthorized' });
 
-      // First try user_orgs join if table exists
+      // 1) user_orgs mapping (if exists)
       const uoCols = await getCols('user_orgs');
       if (uoCols.size && uoCols.has('user_id') && uoCols.has('org_id')) {
         const [rows] = await db.query(
@@ -219,13 +211,28 @@ router.get(
                   o.created_at, o.updated_at
            FROM organizations o
            JOIN user_orgs uo ON uo.org_id = o.id
-           WHERE uo.user_id = ?`,
+           WHERE uo.user_id = ?
+           ORDER BY o.id DESC`,
           [userId]
         );
         return res.json({ ok: true, organizations: rows });
       }
 
-      // Fallback to single latest org
+      // 2) created_by (if the column exists)
+      const orgCols = await getCols('organizations');
+      if (orgCols.has('created_by')) {
+        const [rows] = await db.query(
+          `SELECT id, name, slug, location, services, photo, banner_url, map_url,
+                  created_at, updated_at
+           FROM organizations
+           WHERE created_by = ?
+           ORDER BY id DESC`,
+          [userId]
+        );
+        return res.json({ ok: true, organizations: rows });
+      }
+
+      // 3) fallback: global latest (previous behavior)
       const [rows] = await db.query(
         `SELECT id, name, slug, location, services, photo, banner_url, map_url,
                 created_at, updated_at
@@ -246,7 +253,6 @@ router.get(
 
 /**
  * GET /organizations/:id
- * Fetch a single organization
  */
 router.get('/:id', requireAuth, async (req, res, next) => {
   try {
@@ -271,7 +277,6 @@ router.get('/:id', requireAuth, async (req, res, next) => {
 
 /**
  * PATCH /organizations/:id
- * Update organization fields
  */
 router.patch(
   '/:id',
@@ -282,17 +287,17 @@ router.patch(
       const org_id = num(req.params.id);
       const body = req.body || {};
 
-      // Use the same safe mapper as POST
-      const payloadMap = [
-        ['name', 'name', v => String(v)],
-        ['location', 'location', v => String(v)],
-        ['services', 'services', v => String(v)],
-        ['map_url', 'map_url', v => String(v)],
-        ['slug', 'slug', v => String(v)]
-      ];
-      const { fields, allowed } = await pickAllowedFields('organizations', body, payloadMap);
+      const allowed = await getCols('organizations');
+      const fields = {};
+      for (const k of Object.keys(body)) {
+        if (allowed.has(k)) fields[k] = body[k];
+      }
 
-      // Handle slug if column exists and slug provided
+      if (!Object.keys(fields).length) {
+        return res.status(400).json({ ok: false, error: 'no_valid_fields' });
+      }
+
+      // Keep slug unique/normalized when present
       if (allowed.has('slug') && Object.prototype.hasOwnProperty.call(fields, 'slug')) {
         const base = fields.slug && String(fields.slug).trim().length > 0
           ? fields.slug
@@ -300,14 +305,8 @@ router.patch(
         fields.slug = await ensureUniqueSlug(base, org_id);
       }
 
-      // Updated timestamp
       if (allowed.has('updated_at')) {
         fields.updated_at = dayjs().format('YYYY-MM-DD HH:mm:ss');
-      }
-
-      // If nothing valid to update, don't error; just acknowledge
-      if (!Object.keys(fields).length) {
-        return res.json({ ok: true, updated: {} });
       }
 
       await db.query(`UPDATE organizations SET ? WHERE id=?`, [fields, org_id]);
@@ -320,7 +319,6 @@ router.patch(
 
 /**
  * POST /organizations/:id/banner
- * Upload banner image (form-data: key = banner)
  */
 router.post(
   '/:id/banner',
@@ -347,7 +345,6 @@ router.post(
 
 /**
  * POST /organizations/:id/photo
- * Upload profile photo (form-data: key = photo)
  */
 router.post(
   '/:id/photo',
@@ -374,7 +371,6 @@ router.post(
 
 /**
  * GET /organizations/:id/links
- * Fetch organization links
  */
 router.get('/:id/links', requireAuth, async (req, res, next) => {
   try {
@@ -391,7 +387,6 @@ router.get('/:id/links', requireAuth, async (req, res, next) => {
 
 /**
  * POST /organizations/:id/links
- * Add an organization link
  */
 router.post(
   '/:id/links',
@@ -420,7 +415,6 @@ router.post(
 
 /**
  * GET /organizations/:id/limits
- * Fetch limits
  */
 router.get('/:id/limits', requireAuth, async (req, res, next) => {
   try {
@@ -536,6 +530,5 @@ router.delete(
 
 module.exports = router;
 module.exports.default = router;
-
 
 
