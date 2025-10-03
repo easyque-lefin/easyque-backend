@@ -2,8 +2,7 @@
 // Handles refresh token rotation + logout. No login here.
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const db = require('../db');
-
+const db = require("../services/db");
 const router = express.Router();
 
 const JWT_SECRET = process.env.JWT_SECRET;
