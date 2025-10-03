@@ -63,20 +63,18 @@ async function pickAllowedFields(table, body, payloadMap) {
 function slugify(str) {
   return String(str || '')
     .toLowerCase()
-    .normalize('NFKD')                       // split accents
-    .replace(/[\u0300-\u036f]/g, '')         // drop accents
-    .replace(/[^a-z0-9]+/g, '-')             // non-alnum -> dash
-    .replace(/(^-|-$)+/g, '')                // trim dashes
-    .substring(0, 100);                      // keep within typical column size
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)+/g, '')
+    .substring(0, 100);
 }
 
 async function ensureUniqueSlug(base, excludeOrgId = null) {
-  // If base is empty, start with "org"
   const baseClean = slugify(base) || 'org';
   let candidate = baseClean;
   let i = 1;
 
-  // Build query with optional exclusion (for PATCH)
   while (true) {
     let sql = 'SELECT id FROM organizations WHERE slug = ?';
     const params = [candidate];
@@ -128,17 +126,14 @@ router.post(
       const table = 'organizations';
       const payloadMap = [
         ['name', 'name', v => String(v)],
-        // prefer explicit "location", else allow "address"
         ['location', 'location', v => String(v)],
         ['address', 'location', v => String(v)],
-        // prefer "services", else "service"
         ['services', 'services', v => String(v)],
         ['service', 'services', v => String(v)],
         ['lat', 'lat', v => (v == null ? null : Number(v))],
         ['lng', 'lng', v => (v == null ? null : Number(v))],
         ['map_url', 'map_url', v => String(v)],
-        // NOTE: client doesn't need to send slug; we auto-generate below.
-        // keeping here for compatibility if it *is* sent:
+        // optional incoming slug, but we'll override with unique below if column exists
         ['slug', 'slug', v => String(v)]
       ];
       const { fields, allowed } = await pickAllowedFields(table, body, payloadMap);
@@ -150,7 +145,7 @@ router.post(
       if (allowed.has('created_at')) fields.created_at = dayjs().format('YYYY-MM-DD HH:mm:ss');
       if (allowed.has('updated_at')) fields.updated_at = dayjs().format('YYYY-MM-DD HH:mm:ss');
 
-      // ★★★ Always generate slug if the column exists, regardless of request body ★★★
+      // Always generate slug if the column exists
       if (allowed.has('slug')) {
         const base = fields.slug && String(fields.slug).trim().length > 0
           ? fields.slug
@@ -161,8 +156,7 @@ router.post(
       // Insert
       const [r] = await db.query(`INSERT INTO ${table} SET ?`, [fields]);
 
-      // Optionally map org to the creator (if a mapping table exists)
-      // e.g., user_orgs(user_id, org_id, role). We'll detect table and columns:
+      // Optionally map org to the creator
       const userId = req.user && req.user.id;
       if (userId && (await getCols('user_orgs')).size) {
         const cols = await getCols('user_orgs');
@@ -184,14 +178,13 @@ router.post(
 
 /**
  * GET /organizations
- * List organizations (admin only). If you want org_admin to list their org(s),
- * swap to requireAnyRole('admin','organization_admin') and join by user_orgs.
+ * List organizations (admin only).
  */
 router.get(
   '/',
   requireAuth,
   requireAnyRole('admin'),
-  async (req, res, next) => {
+  async (_req, res, next) => {
     try {
       const [rows] = await db.query(
         `SELECT id, name, slug, location, services, photo, banner_url, map_url,
@@ -209,8 +202,6 @@ router.get(
 /**
  * GET /organizations/me
  * Fetch the organization(s) for the current user.
- * If you use a mapping table (user_orgs), this will return their org(s).
- * If you don't have user_orgs, adapt this to your schema.
  */
 router.get(
   '/me',
@@ -234,7 +225,7 @@ router.get(
         return res.json({ ok: true, organizations: rows });
       }
 
-      // If no mapping table, fall back to a single “default” org heuristic (optional)
+      // Fallback to single latest org
       const [rows] = await db.query(
         `SELECT id, name, slug, location, services, photo, banner_url, map_url,
                 created_at, updated_at
@@ -291,17 +282,17 @@ router.patch(
       const org_id = num(req.params.id);
       const body = req.body || {};
 
-      const allowed = await getCols('organizations');
-      const fields = {};
-      for (const k of Object.keys(body)) {
-        if (allowed.has(k)) fields[k] = body[k];
-      }
+      // Use the same safe mapper as POST
+      const payloadMap = [
+        ['name', 'name', v => String(v)],
+        ['location', 'location', v => String(v)],
+        ['services', 'services', v => String(v)],
+        ['map_url', 'map_url', v => String(v)],
+        ['slug', 'slug', v => String(v)]
+      ];
+      const { fields, allowed } = await pickAllowedFields('organizations', body, payloadMap);
 
-      if (!Object.keys(fields).length) {
-        return res.status(400).json({ ok: false, error: 'no_valid_fields' });
-      }
-
-      // If slug column exists and slug was provided, normalize & keep unique
+      // Handle slug if column exists and slug provided
       if (allowed.has('slug') && Object.prototype.hasOwnProperty.call(fields, 'slug')) {
         const base = fields.slug && String(fields.slug).trim().length > 0
           ? fields.slug
@@ -309,8 +300,14 @@ router.patch(
         fields.slug = await ensureUniqueSlug(base, org_id);
       }
 
+      // Updated timestamp
       if (allowed.has('updated_at')) {
         fields.updated_at = dayjs().format('YYYY-MM-DD HH:mm:ss');
+      }
+
+      // If nothing valid to update, don't error; just acknowledge
+      if (!Object.keys(fields).length) {
+        return res.json({ ok: true, updated: {} });
       }
 
       await db.query(`UPDATE organizations SET ? WHERE id=?`, [fields, org_id]);
@@ -539,5 +536,6 @@ router.delete(
 
 module.exports = router;
 module.exports.default = router;
+
 
 
