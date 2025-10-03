@@ -1,7 +1,7 @@
 // routes/signup.js
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const db = require('../db');
+const db = require("../services/db");
 const router = express.Router();
 
 /**
