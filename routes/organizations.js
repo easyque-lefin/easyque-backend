@@ -7,7 +7,8 @@ const multer = require('multer');
 
 const db = require('../services/db');
 const { requireAuth } = require('../middleware/auth');
-const { requireAnyRole } = require('../middleware/roles');
+// NOTE: using your existing guard for now; we'll upgrade it in middleware next
+const { requireAnyRole, ensureOrgAccessParam } = require('../middleware/roles');
 
 const router = express.Router();
 
@@ -26,12 +27,16 @@ const upload = multer({ storage });
 
 /* ---------- utils ---------- */
 async function getCols(table) {
-  const [rows] = await db.query(
-    `SELECT column_name FROM information_schema.columns
-     WHERE table_schema = DATABASE() AND table_name = ?`,
-    [table]
-  );
-  return new Set(rows.map(r => String(r.column_name)));
+  try {
+    const [rows] = await db.query(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema = DATABASE() AND table_name = ?`,
+      [table]
+    );
+    return new Set(rows.map(r => String(r.column_name)));
+  } catch {
+    return new Set();
+  }
 }
 const num = (x, d = 0) => {
   const n = Number(x);
@@ -59,22 +64,20 @@ async function pickAllowedFields(table, body, payloadMap) {
   return { fields, allowed };
 }
 
-/* ---------- NEW: slug helpers (auto-generate & ensure unique) ---------- */
+/* ---------- slug helpers ---------- */
 function slugify(str) {
   return String(str || '')
     .toLowerCase()
-    .normalize('NFKD')                       // split accents
-    .replace(/[\u0300-\u036f]/g, '')         // drop accents
-    .replace(/[^a-z0-9]+/g, '-')             // non-alnum -> dash
-    .replace(/(^-|-$)+/g, '')                // trim dashes
-    .substring(0, 100);                      // keep within typical column size
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)+/g, '')
+    .substring(0, 100);
 }
-
 async function ensureUniqueSlug(base, excludeOrgId = null) {
   const baseClean = slugify(base) || 'org';
   let candidate = baseClean;
   let i = 1;
-
   while (true) {
     let sql = 'SELECT id FROM organizations WHERE slug = ?';
     const params = [candidate];
@@ -91,7 +94,7 @@ async function ensureUniqueSlug(base, excludeOrgId = null) {
 }
 
 /* =========================================================
-   NEW: CREATE / LIST / "MY ORG"
+   CREATE / LIST / "MY ORG"
    ========================================================= */
 
 /**
@@ -112,16 +115,13 @@ router.post(
       const table = 'organizations';
       const payloadMap = [
         ['name', 'name', v => String(v)],
-        // prefer explicit "location", else allow "address"
         ['location', 'location', v => String(v)],
         ['address', 'location', v => String(v)],
-        // prefer "services", else "service"
         ['services', 'services', v => String(v)],
         ['service', 'services', v => String(v)],
         ['lat', 'lat', v => (v == null ? null : Number(v))],
         ['lng', 'lng', v => (v == null ? null : Number(v))],
         ['map_url', 'map_url', v => String(v)],
-        // accept incoming slug if sent, but we'll overwrite/normalize anyway
         ['slug', 'slug', v => String(v)]
       ];
       const { fields, allowed } = await pickAllowedFields(table, body, payloadMap);
@@ -129,16 +129,16 @@ router.post(
       // required
       fields.name = String(body.name);
 
-      // NEW: stamp creator if column exists
+      // Stamp creator if column exists
       if (allowed.has('created_by') && req.user?.id) {
         fields.created_by = req.user.id;
       }
 
-      // Optional timestamps if present
+      // Optional timestamps
       if (allowed.has('created_at')) fields.created_at = dayjs().format('YYYY-MM-DD HH:mm:ss');
       if (allowed.has('updated_at')) fields.updated_at = dayjs().format('YYYY-MM-DD HH:mm:ss');
 
-      // Always generate/normalize slug if column exists
+      // Generate/normalize slug if column exists
       if (allowed.has('slug')) {
         const base = fields.slug && String(fields.slug).trim().length > 0
           ? fields.slug
@@ -148,7 +148,7 @@ router.post(
 
       const [r] = await db.query(`INSERT INTO ${table} SET ?`, [fields]);
 
-      // Link creator to org via user_orgs if that table exists
+      // Link creator to org via user_orgs if table exists
       const userId = req.user && req.user.id;
       const uoCols = await getCols('user_orgs');
       if (userId && uoCols.size) {
@@ -193,7 +193,7 @@ router.get(
 
 /**
  * GET /organizations/me
- * Prefer user_orgs → created_by → global latest
+ * Prefer user_orgs → created_by → fallback global latest
  */
 router.get(
   '/me',
@@ -232,7 +232,7 @@ router.get(
         return res.json({ ok: true, organizations: rows });
       }
 
-      // 3) fallback: global latest (previous behavior)
+      // 3) fallback: global latest (legacy)
       const [rows] = await db.query(
         `SELECT id, name, slug, location, services, photo, banner_url, map_url,
                 created_at, updated_at
@@ -248,32 +248,35 @@ router.get(
 );
 
 /* =========================================================
-   EXISTING: FETCH / UPDATE / UPLOADS / LINKS / LIMITS
+   FETCH / UPDATE
    ========================================================= */
 
 /**
  * GET /organizations/:id
  */
-router.get('/:id', requireAuth, async (req, res, next) => {
-  try {
-    const org_id = num(req.params.id);
-    const [rows] = await db.query(
-      `SELECT id, name, slug, location, services, photo, banner_url, map_url,
-              created_at, updated_at
-       FROM organizations
-       WHERE id = ?`,
-      [org_id]
-    );
-
-    if (!rows.length) {
-      return res.status(404).json({ ok: false, error: 'not_found' });
+router.get(
+  '/:id',
+  requireAuth,
+  ensureOrgAccessParam('id'),
+  async (req, res, next) => {
+    try {
+      const org_id = num(req.params.id);
+      const [rows] = await db.query(
+        `SELECT id, name, slug, location, services, photo, banner_url, map_url,
+                created_at, updated_at, created_by
+         FROM organizations
+         WHERE id = ?`,
+        [org_id]
+      );
+      if (!rows.length) {
+        return res.status(404).json({ ok: false, error: 'not_found' });
+      }
+      res.json({ ok: true, org: rows[0] });
+    } catch (err) {
+      next(err);
     }
-
-    res.json({ ok: true, org: rows[0] });
-  } catch (err) {
-    next(err);
   }
-});
+);
 
 /**
  * PATCH /organizations/:id
@@ -282,6 +285,7 @@ router.patch(
   '/:id',
   requireAuth,
   requireAnyRole('admin', 'organization_admin'),
+  ensureOrgAccessParam('id'),
   async (req, res, next) => {
     try {
       const org_id = Number(req.params.id);
@@ -296,7 +300,6 @@ router.patch(
       }
 
       // Accept a few aliases the client may send
-      // (harmless if those columns don't exist)
       if (body.service != null && allowed.has('services')) {
         fields.services = String(body.service);
       }
@@ -314,7 +317,6 @@ router.patch(
         else if (typeof v === 'string' && v.trim().length === 0) delete fields[k];
       }
 
-      // If nothing to update, return 200 with a note (avoid UI error toast)
       if (!Object.keys(fields).length) {
         return res.json({ ok: true, updated: {}, note: 'no_valid_fields' });
       }
@@ -330,26 +332,54 @@ router.patch(
     }
   }
 );
+
+/* =========================================================
+   UPLOADS (photo / banner) + LINKS
+   ========================================================= */
+
 /**
  * POST /organizations/:id/banner
+ * — merged with routes/orgs.js behavior:
+ *   - uploads banner
+ *   - also accepts { google_review_url } and updates it
+ *   - if column org_banner_url exists, uses it; else banner_url
  */
 router.post(
   '/:id/banner',
   requireAuth,
   requireAnyRole('admin', 'organization_admin'),
+  ensureOrgAccessParam('id'),
   upload.single('banner'),
   async (req, res, next) => {
     try {
       const org_id = num(req.params.id);
-      if (!req.file) {
-        return res.status(400).json({ ok: false, error: 'no_file' });
+      const { google_review_url } = req.body || {};
+
+      const orgCols = await getCols('organizations');
+      let url = null;
+
+      if (req.file) {
+        // multer already stored the file in /uploads with safe filename
+        url = `/uploads/${req.file.filename}`;
+
+        // Choose column name
+        const bannerCol = orgCols.has('org_banner_url')
+          ? 'org_banner_url'
+          : (orgCols.has('banner_url') ? 'banner_url' : null);
+
+        if (bannerCol) {
+          await db.query(`UPDATE organizations SET ${bannerCol}=? WHERE id=?`, [url, org_id]);
+        }
       }
-      const banner_url = `/uploads/${req.file.filename}`;
-      await db.query(`UPDATE organizations SET banner_url=? WHERE id=?`, [
-        banner_url,
-        org_id
-      ]);
-      res.json({ ok: true, banner_url });
+
+      if (google_review_url && orgCols.has('google_review_url')) {
+        await db.query(
+          `UPDATE organizations SET google_review_url=? WHERE id=?`,
+          [google_review_url, org_id]
+        );
+      }
+
+      res.json({ ok: true, url });
     } catch (err) {
       next(err);
     }
@@ -363,6 +393,7 @@ router.post(
   '/:id/photo',
   requireAuth,
   requireAnyRole('admin', 'organization_admin'),
+  ensureOrgAccessParam('id'),
   upload.single('photo'),
   async (req, res, next) => {
     try {
@@ -384,19 +415,28 @@ router.post(
 
 /**
  * GET /organizations/:id/links
+ * (returns empty if org_links table doesn't exist)
  */
-router.get('/:id/links', requireAuth, async (req, res, next) => {
-  try {
-    const org_id = num(req.params.id);
-    const [rows] = await db.query(
-      `SELECT id, org_id, type, url FROM org_links WHERE org_id=?`,
-      [org_id]
-    );
-    res.json({ ok: true, links: rows });
-  } catch (err) {
-    next(err);
+router.get(
+  '/:id/links',
+  requireAuth,
+  ensureOrgAccessParam('id'),
+  async (req, res, next) => {
+    try {
+      const org_id = num(req.params.id);
+      const cols = await getCols('org_links');
+      if (!cols.size) return res.json({ ok: true, links: [] });
+
+      const [rows] = await db.query(
+        `SELECT id, org_id, type, url FROM org_links WHERE org_id=?`,
+        [org_id]
+      );
+      res.json({ ok: true, links: rows });
+    } catch (err) {
+      next(err);
+    }
   }
-});
+);
 
 /**
  * POST /organizations/:id/links
@@ -405,14 +445,17 @@ router.post(
   '/:id/links',
   requireAuth,
   requireAnyRole('admin', 'organization_admin'),
+  ensureOrgAccessParam('id'),
   async (req, res, next) => {
     try {
       const org_id = num(req.params.id);
       const { type, url } = req.body || {};
+      const cols = await getCols('org_links');
+      if (!cols.size) {
+        return res.status(404).json({ ok: false, error: 'org_links_table_missing' });
+      }
       if (!type || !url) {
-        return res
-          .status(400)
-          .json({ ok: false, error: 'missing_type_or_url' });
+        return res.status(400).json({ ok: false, error: 'missing_type_or_url' });
       }
 
       const [r] = await db.query(
@@ -426,21 +469,143 @@ router.post(
   }
 );
 
+/* =========================================================
+   LIMITS (GET existing) + merged LIMITS UPDATE from orgs.js
+   ========================================================= */
+
 /**
  * GET /organizations/:id/limits
+ * (returns empty if org_limits table doesn't exist)
  */
-router.get('/:id/limits', requireAuth, async (req, res, next) => {
-  try {
-    const org_id = num(req.params.id);
-    const [rows] = await db.query(
-      `SELECT id, org_id, max_tokens, max_users FROM org_limits WHERE org_id=?`,
-      [org_id]
-    );
-    res.json({ ok: true, limits: rows });
-  } catch (err) {
-    next(err);
+router.get(
+  '/:id/limits',
+  requireAuth,
+  ensureOrgAccessParam('id'),
+  async (req, res, next) => {
+    try {
+      const org_id = num(req.params.id);
+      const cols = await getCols('org_limits');
+      if (!cols.size) return res.json({ ok: true, limits: [] });
+
+      const [rows] = await db.query(
+        `SELECT id, org_id, max_tokens, max_users FROM org_limits WHERE org_id=?`,
+        [org_id]
+      );
+      res.json({ ok: true, limits: rows });
+    } catch (err) {
+      next(err);
+    }
   }
-});
+);
+
+/**
+ * POST /organizations/:id/limits
+ * (merged from routes/orgs.js)
+ * Updates plan_mode, users_count, expected_bookings_per_day, monthly_expected_bookings
+ * Only updates columns that exist
+ */
+router.post(
+  '/:id/limits',
+  requireAuth,
+  requireAnyRole('admin', 'organization_admin'),
+  ensureOrgAccessParam('id'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const { plan_mode, users_count, expected_bookings_per_day } = req.body || {};
+      const monthly = expected_bookings_per_day ? Number(expected_bookings_per_day) * 30 : null;
+
+      const cols = await getCols('organizations');
+      // Build a dynamic update only for columns that exist
+      const sets = [];
+      const params = [];
+      if (cols.has('plan_mode')) { sets.push('plan_mode = COALESCE(?, plan_mode)'); params.push(plan_mode || null); }
+      if (cols.has('users_count')) { sets.push('users_count = COALESCE(?, users_count)'); params.push(users_count || null); }
+      if (cols.has('expected_bookings_per_day')) {
+        sets.push('expected_bookings_per_day = COALESCE(?, expected_bookings_per_day)');
+        params.push(expected_bookings_per_day || null);
+      }
+      if (cols.has('monthly_expected_bookings')) {
+        sets.push('monthly_expected_bookings = COALESCE(?, monthly_expected_bookings)');
+        params.push(monthly);
+      }
+
+      if (!sets.length) {
+        return res.json({ ok: true, note: 'no_limit_columns_present' });
+      }
+
+      const sql = `UPDATE organizations SET ${sets.join(', ')} WHERE id = ?`;
+      params.push(id);
+      await db.query(sql, params);
+      res.json({ ok: true });
+    } catch (e) { next(e); }
+  }
+);
+
+/* =========================================================
+   BREAK CONTROLS (per assignee) — merged from routes/orgs.js
+   ========================================================= */
+
+router.post(
+  '/:id/break/start',
+  requireAuth,
+  requireAnyRole('admin','organization_admin','receptionist','assigned_user'),
+  ensureOrgAccessParam('id'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const { user_id, minutes = 15 } = req.body || {};
+      if (!user_id) return res.status(400).json({ ok: false, error: 'user_id required' });
+
+      // booking_date = today (YYYY-MM-DD)
+      const today = new Date();
+      const yyyy = today.getFullYear();
+      const mm = String(today.getMonth()+1).padStart(2,'0');
+      const dd = String(today.getDate()).padStart(2,'0');
+      const booking_date = `${yyyy}-${mm}-${dd}`;
+      const until = new Date(Date.now() + Number(minutes) * 60000);
+
+      await db.query(
+        `INSERT INTO assigned_live_metrics
+         (org_id, assigned_user_id, booking_date, break_started_at, break_until, updated_at)
+         VALUES (?,?,?,?,?, NOW())
+         ON DUPLICATE KEY UPDATE break_started_at=VALUES(break_started_at),
+                                 break_until=VALUES(break_until),
+                                 updated_at=NOW()`,
+        [id, user_id, booking_date, new Date(), until]
+      );
+      res.json({ ok: true, break_until: until });
+    } catch (e) { next(e); }
+  }
+);
+
+router.post(
+  '/:id/break/end',
+  requireAuth,
+  requireAnyRole('admin','organization_admin','receptionist','assigned_user'),
+  ensureOrgAccessParam('id'),
+  async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      const { user_id } = req.body || {};
+      if (!user_id) return res.status(400).json({ ok: false, error: 'user_id required' });
+
+      const today = new Date();
+      const yyyy = today.getFullYear();
+      const mm = String(today.getMonth()+1).padStart(2,'0');
+      const dd = String(today.getDate()).padStart(2,'0');
+      const booking_date = `${yyyy}-${mm}-${dd}`;
+
+      await db.query(
+        `UPDATE assigned_live_metrics
+         SET break_until = NULL, break_started_at = NULL, updated_at = NOW()
+         WHERE org_id = ? AND assigned_user_id = ? AND booking_date = ?`,
+        [id, user_id, booking_date]
+      );
+      res.json({ ok: true });
+    } catch (e) { next(e); }
+  }
+);
 
 /* =========================================================
    ORG ITEMS ROUTES (existing)
@@ -453,6 +618,7 @@ router.post(
   '/:org_id/items',
   requireAuth,
   requireAnyRole('admin', 'organization_admin'),
+  ensureOrgAccessParam('org_id'),
   async (req, res, next) => {
     try {
       const org_id = num(req.params.org_id);
@@ -494,12 +660,8 @@ router.post(
 router.get(
   '/:org_id/items',
   requireAuth,
-  requireAnyRole(
-    'admin',
-    'organization_admin',
-    'receptionist',
-    'assigned_user'
-  ),
+  requireAnyRole('admin','organization_admin','receptionist','assigned_user'),
+  ensureOrgAccessParam('org_id'),
   async (req, res, next) => {
     try {
       const org_id = num(req.params.org_id);
@@ -524,6 +686,7 @@ router.delete(
   '/:org_id/items/:item_id',
   requireAuth,
   requireAnyRole('admin', 'organization_admin'),
+  ensureOrgAccessParam('org_id'),
   async (req, res, next) => {
     try {
       const org_id = num(req.params.org_id);
@@ -541,51 +704,71 @@ router.delete(
   }
 );
 
-
 /* -------------------- ORG USERS -------------------- */
 
 // List users in an org
-router.get('/:org_id/users', requireAuth, async (req, res, next) => {
-  try {
-    const org_id = Number(req.params.org_id) || 0;
-    const [rows] = await db.query(
-      `SELECT id, org_id, name, email, dept, role, avg_service_seconds,
-              created_at, updated_at
+router.get(
+  '/:org_id/users',
+  requireAuth,
+  requireAnyRole('admin','organization_admin','receptionist','assigned_user'),
+  ensureOrgAccessParam('org_id'),
+  async (req, res, next) => {
+    try {
+      const org_id = Number(req.params.org_id) || 0;
+      const [rows] = await db.query(
+        `SELECT id, org_id, name, email, dept, role, avg_service_seconds,
+                created_at, updated_at
          FROM org_users WHERE org_id = ?
          ORDER BY created_at ASC`,
-      [org_id]
-    );
-    res.json({ ok: true, users: rows });
-  } catch (err) { next(err); }
-});
+        [org_id]
+      );
+      res.json({ ok: true, users: rows });
+    } catch (err) { next(err); }
+  }
+);
 
 // Add one user to an org
-router.post('/:org_id/users', requireAuth, requireAnyRole('admin','organization_admin'), async (req, res, next) => {
-  try {
-    const org_id = Number(req.params.org_id) || 0;
-    const { name, email = '', dept = '', role } = req.body || {};
-    if (!org_id || !name || !role) {
-      return res.status(400).json({ ok:false, error:'missing_field', fields:{ org_id: !!org_id, name: !!name, role: !!role }});
-    }
-    const [r] = await db.query(
-      `INSERT INTO org_users (org_id, name, email, dept, role)
-       VALUES (?,?,?,?,?)`,
-      [org_id, String(name), String(email), String(dept), String(role)]
-    );
-    res.status(201).json({ ok:true, user:{ id:r.insertId, org_id, name, email, dept, role } });
-  } catch (err) { next(err); }
-});
+router.post(
+  '/:org_id/users',
+  requireAuth,
+  requireAnyRole('admin','organization_admin'),
+  ensureOrgAccessParam('org_id'),
+  async (req, res, next) => {
+    try {
+      const org_id = Number(req.params.org_id) || 0;
+      const { name, email = '', dept = '', role } = req.body || {};
+      if (!org_id || !name || !role) {
+        return res.status(400).json({
+          ok:false,
+          error:'missing_field',
+          fields:{ org_id: !!org_id, name: !!name, role: !!role }
+        });
+      }
+      const [r] = await db.query(
+        `INSERT INTO org_users (org_id, name, email, dept, role)
+         VALUES (?,?,?,?,?)`,
+        [org_id, String(name), String(email), String(dept), String(role)]
+      );
+      res.status(201).json({ ok:true, user:{ id:r.insertId, org_id, name, email, dept, role } });
+    } catch (err) { next(err); }
+  }
+);
 
 // Delete one user
-router.delete('/:org_id/users/:user_id', requireAuth, requireAnyRole('admin','organization_admin'), async (req, res, next) => {
-  try {
-    const org_id  = Number(req.params.org_id)  || 0;
-    const user_id = Number(req.params.user_id) || 0;
-    const [r] = await db.query(`DELETE FROM org_users WHERE id=? AND org_id=?`, [user_id, org_id]);
-    res.json({ ok:true, deleted: r.affectedRows });
-  } catch (err) { next(err); }
-});
-
+router.delete(
+  '/:org_id/users/:user_id',
+  requireAuth,
+  requireAnyRole('admin','organization_admin'),
+  ensureOrgAccessParam('org_id'),
+  async (req, res, next) => {
+    try {
+      const org_id  = Number(req.params.org_id)  || 0;
+      const user_id = Number(req.params.user_id) || 0;
+      const [r] = await db.query(`DELETE FROM org_users WHERE id=? AND org_id=?`, [user_id, org_id]);
+      res.json({ ok:true, deleted: r.affectedRows });
+    } catch (err) { next(err); }
+  }
+);
 
 module.exports = router;
 module.exports.default = router;
